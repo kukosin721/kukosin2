@@ -117,6 +117,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import com.kukosin.app.ui.component.KukosinWaveformSlider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRowDefaults
@@ -1978,26 +1979,25 @@ private fun NowPlayingSheet(
                             }
                         }
                         Spacer(Modifier.height(16.dp))
-                        Slider(
-                            value = if (seeking) slider else if (duration > 0) position.toFloat() / duration else 0f,
-                            onValueChange = {
-                                seeking = true
-                                slider = it
+                        KukosinWaveformSlider(
+                            progress = if (duration > 0) position.toFloat() / duration else 0f,
+                            onSeek = { controller.seekTo((it * duration).toLong()) },
+                            isPlaying = isPlaying,
+                            onPlayPause = { if (controller.isPlaying) controller.pause() else controller.play() },
+                            onPrev = { controller.seekToPrevious() },
+                            onNext = { controller.seekToNext() },
+                            onShuffle = { QueueManager.toggleShuffle(controller) },
+                            onRepeat = {
+                                controller.repeatMode = when (controller.repeatMode) {
+                                    Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
+                                    Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+                                    else -> Player.REPEAT_MODE_OFF
+                                }
                             },
-                            onValueChangeFinished = {
-                                controller.seekTo((slider * duration).toLong())
-                                seeking = false
-                            },
-                            colors = SliderDefaults.colors(
-                                thumbColor = Gold,
-                                activeTrackColor = Gold,
-                                inactiveTrackColor = InkSoft,
-                            ),
+                            positionLabel = formatTime(position),
+                            durationLabel = formatTime(duration),
+                            modifier = Modifier.fillMaxWidth()
                         )
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(formatTime(if (seeking) (slider * duration).toLong() else position), color = CreamMuted, style = MaterialTheme.typography.labelSmall)
-                            Text(formatTime(duration), color = CreamMuted, style = MaterialTheme.typography.labelSmall)
-                        }
                     }
                 }
             }
@@ -2017,93 +2017,6 @@ private fun NowPlayingSheet(
             ) {
                 Column(Modifier.fillMaxWidth()) {
                     Spacer(Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        IconButton(onClick = { QueueManager.toggleShuffle(controller) }) {
-                            Icon(Icons.Rounded.Shuffle, contentDescription = "Aleatorio", tint = if (shuffle) Gold else CreamMuted)
-                        }
-                        IconButton(onClick = { controller.seekToPrevious() }) {
-                            Icon(Icons.Rounded.SkipPrevious, contentDescription = "Anterior", tint = Cream, modifier = Modifier.size(40.dp))
-                        }
-                        FilledIconButton(
-                            onClick = { if (controller.isPlaying) controller.pause() else controller.play() },
-                            modifier = Modifier.size(72.dp),
-                            colors = IconButtonDefaults.filledIconButtonColors(containerColor = Gold, contentColor = Ink),
-                            shape = CircleShape,
-                        ) {
-                            Icon(
-                                if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                contentDescription = if (isPlaying) "Pausar" else "Reproducir",
-                                modifier = Modifier.size(40.dp),
-                            )
-                        }
-                        IconButton(onClick = { controller.seekToNext() }) {
-                            Icon(Icons.Rounded.SkipNext, contentDescription = "Siguiente", tint = Cream, modifier = Modifier.size(40.dp))
-                        }
-                        IconButton(
-                            onClick = {
-                                controller.repeatMode = when (controller.repeatMode) {
-                                    Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
-                                    Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
-                                    else -> Player.REPEAT_MODE_OFF
-                                }
-                            },
-                        ) {
-                            Icon(
-                                if (repeatMode == Player.REPEAT_MODE_ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,
-                                contentDescription = "Repetir",
-                                tint = if (repeatMode == Player.REPEAT_MODE_OFF) CreamMuted else Gold,
-                            )
-                        }
-                    }
-
-                    Spacer(Modifier.height(12.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        IconButton(onClick = {
-                            if (volume > 0f) {
-                                lastVolume = volume
-                                volume = 0f
-                                controller.volume = 0f
-                            } else {
-                                val restored = lastVolume.coerceIn(0.01f, 1f)
-                                volume = restored
-                                controller.volume = restored
-                            }
-                        }) {
-                            Icon(
-                                imageVector = if (volume == 0f) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeDown,
-                                contentDescription = if (volume == 0f) "Activar sonido" else "Silenciar",
-                                tint = Gold,
-                                modifier = Modifier.size(22.dp),
-                            )
-                        }
-                        Slider(
-                            value = volume,
-                            valueRange = 0f..1f,
-                            onValueChange = { newVolume ->
-                                if (newVolume > 0f) lastVolume = newVolume
-                                volume = newVolume
-                                controller.volume = newVolume
-                            },
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(horizontal = 8.dp),
-                            colors = SliderDefaults.colors(
-                                thumbColor = Gold,
-                                activeTrackColor = Gold,
-                                inactiveTrackColor = InkSoft,
-                            ),
-                        )
-                        Icon(Icons.AutoMirrored.Rounded.VolumeUp, contentDescription = "Subir volumen", tint = CreamMuted, modifier = Modifier.size(20.dp))
-                    }
-
-                    Spacer(Modifier.height(12.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly,
