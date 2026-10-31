@@ -12,6 +12,7 @@ import com.kukosin.app.data.analysis.AudioAnalysis
 import com.kukosin.app.data.analysis.AudioAnalyzer
 import com.kukosin.app.data.ytm.YtmService
 import com.kukosin.app.data.ytm.YtmTrack
+import com.kukosin.app.data.ytm.describeYtmError
 import com.kukosin.app.playback.AudioConfig
 import com.kukosin.app.playback.AudioSettingsManager
 import kotlinx.coroutines.Job
@@ -43,6 +44,7 @@ data class LibraryUiState(
     val ytmTracks: List<YtmTrack> = emptyList(),
     val ytmQuery: String = "",
     val isYtmSearching: Boolean = false,
+    val ytmError: String? = null,
     val query: String = "",
     val isScanning: Boolean = false,
     val hasScanned: Boolean = false,
@@ -98,16 +100,14 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     private val ytmTracks = MutableStateFlow<List<YtmTrack>>(emptyList())
     private val ytmQuery = MutableStateFlow("")
     private val isYtmSearching = MutableStateFlow(false)
+    private val ytmError = MutableStateFlow<String?>(null)
     private val query = MutableStateFlow("")
     private val isScanning = MutableStateFlow(false)
     private val hasScanned = MutableStateFlow(false)
     private val error = MutableStateFlow<String?>(null)
     private val analysis = MutableStateFlow<AudioAnalysis?>(null)
     private var analysisJob: Job? = null
-
-    init {
-        searchYtm("")
-    }
+    private var ytmSearchJob: Job? = null
 
     val uiState: StateFlow<LibraryUiState> = combine(
         combine(tracks, albums, artists, rootFolder, folderPath) { tr, al, ar, rf, fp ->
@@ -119,10 +119,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         combine(ytmTracks, ytmQuery, isYtmSearching) { yTr, yQ, ySc ->
             Tuple3(yTr, yQ, ySc)
         },
-        combine(query, isScanning, hasScanned, error) { q, sc, hasSc, err ->
-            Tuple4(q, sc, hasSc, err)
+        combine(query, isScanning, hasScanned, error, ytmError) { q, sc, hasSc, err, yErr ->
+            Tuple5(q, sc, hasSc, err, yErr)
         },
-    ) { (tr, al, ar, rf, fp), (tab, sal, sar, ins), (yTr, yQ, ySc), (q, sc, hasSc, err) ->
+    ) { (tr, al, ar, rf, fp), (tab, sal, sar, ins), (yTr, yQ, ySc), (q, sc, hasSc, err, yErr) ->
         LibraryUiState(
             tracks = tr,
             albums = al,
@@ -136,6 +136,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             ytmTracks = yTr,
             ytmQuery = yQ,
             isYtmSearching = ySc,
+            ytmError = yErr,
             query = q,
             isScanning = sc,
             hasScanned = hasSc,
@@ -178,7 +179,8 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         AudioSettingsManager.init(getApplication())
-        searchYtm("")
+        // Antes se llamaba a searchYtm("") aquí y en otro bloque init duplicado: dos peticiones
+        // de red al abrir la app gastaban datos y latencia sin que el usuario lo pidiera.
     }
 
     fun toggleAutoAnalyze() {
@@ -255,10 +257,28 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun searchYtm(q: String = ytmQuery.value) {
-        viewModelScope.launch {
+        val needle = q.trim()
+        if (needle.isEmpty()) {
+            ytmTracks.value = emptyList()
+            ytmError.value = null
+            return
+        }
+        ytmSearchJob?.cancel()
+        ytmSearchJob = viewModelScope.launch {
             isYtmSearching.value = true
-            ytmTracks.value = YtmService.search(q)
-            isYtmSearching.value = false
+            ytmError.value = null
+            try {
+                val results = YtmService.search(needle)
+                ytmTracks.value = results
+                if (results.isEmpty()) {
+                    ytmError.value = "Sin resultados para \"$needle\""
+                }
+            } catch (throwable: Throwable) {
+                ytmTracks.value = emptyList()
+                ytmError.value = describeYtmError(throwable)
+            } finally {
+                isYtmSearching.value = false
+            }
         }
     }
 

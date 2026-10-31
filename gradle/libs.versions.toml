@@ -12,6 +12,8 @@ media3 = "1.11.1"
 coil = "2.7.0"
 nextlib = "1.11.1-0.16.0"
 oboe = "1.11.0"
+newpipeExtractor = "v0.26.5"
+desugarJdkLibs = "2.1.5"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -39,6 +41,8 @@ nextlib-media3ext = { group = "io.github.anilbeesetti", name = "nextlib-media3ex
 nextlib-mediainfo = { group = "io.github.anilbeesetti", name = "nextlib-mediainfo", version.ref = "nextlib" }
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 oboe = { group = "com.google.oboe", name = "oboe", version.ref = "oboe" }
+newpipe-extractor = { group = "com.github.TeamNewPipe", name = "NewPipeExtractor", version.ref = "newpipeExtractor" }
+desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugarJdkLibs" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

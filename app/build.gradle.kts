@@ -38,6 +38,8 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+        // NewPipeExtractor usa java.time / java.util.stream, que en minSdk 24 no existen.
+        isCoreLibraryDesugaringEnabled = true
     }
     kotlin {
         compilerOptions {
@@ -77,6 +79,8 @@ dependencies {
     implementation(libs.nextlib.mediainfo)
     implementation(libs.coil.compose)
     implementation(libs.oboe)
+    implementation(libs.newpipe.extractor)
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

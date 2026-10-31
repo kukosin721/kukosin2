@@ -37,6 +37,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -134,6 +136,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.animation.core.Animatable
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import com.kukosin.app.data.ytm.YtmService
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.BlurredEdgeTreatment
@@ -233,13 +241,21 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
     }
 
     val playback = rememberPlaybackState(controller, library.tracks)
+
+    /** videoId de YouTube Music que está sonando, para pintar la fila activa en la pestaña YTM. */
+    val playingYtmId = playback.current?.uri
+        ?.takeIf { it.scheme == YtmService.STREAM_SCHEME }
+        ?.lastPathSegment
     val output by AudioRoute.current.collectAsStateWithLifecycle()
     val analysis by viewModel.analysisState.collectAsStateWithLifecycle()
     val audioConfig by viewModel.audioConfig.collectAsStateWithLifecycle()
     var showSettings by remember { mutableStateOf(false) }
 
     LaunchedEffect(playback.current?.uri) {
-        playback.current?.let { currentTrack ->
+        // Los streams de YouTube Music no tienen archivo ni PCM local: pedir metadatos/análisis
+        // solo gastaba trabajo y podía dejar la pantalla "analizando" para siempre.
+        val currentTrack = playback.current
+        if (currentTrack != null && currentTrack.isLocal) {
             viewModel.prepareMetadata(currentTrack)
             if (audioConfig.autoAnalyze) {
                 viewModel.analyzeSpectral(currentTrack)
@@ -296,9 +312,18 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
                     isSearching = library.isYtmSearching,
                     onQueryChange = viewModel::onYtmQueryChange,
                     onSearch = { viewModel.searchYtm() },
+                    errorMessage = library.ytmError ?: playback.error,
+                    playingVideoId = playingYtmId,
+                    isPlaying = playback.isPlaying,
                     onTrackClick = { ytmTrack ->
                         controller?.let { player ->
-                            QueueManager.playItems(player, listOf(ytmTrack.toMediaItem()), 0)
+                            // Cola real: se encola TODA la búsqueda y se arranca en la tocada,
+                            // así "siguiente" y el autoplay siguen con el resto de resultados.
+                            val queue = library.ytmTracks.map(YtmService::toMediaItem)
+                            val startIndex = library.ytmTracks
+                                .indexOfFirst { it.id == ytmTrack.id }
+                                .coerceAtLeast(0)
+                            QueueManager.playItems(player, queue, startIndex)
                         }
                     },
                     modifier = Modifier.weight(1f),
@@ -514,6 +539,46 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
     }
 }
 
+/**
+ * Convierte un MediaItem de YouTube Music en el [Track] que pinta la interfaz.
+ *
+ * Los datos de audio (códec, bitrate) llegan por extras porque el archivo todavía no existe:
+ * el audio se resuelve recién cuando ExoPlayer abre el stream (ver PlaybackService).
+ */
+private fun MediaItem.toStreamTrack(): Track {
+    val videoId = localConfiguration?.uri?.lastPathSegment.orEmpty()
+    return Track(
+        id = videoId.hashCode().toLong(),
+        title = mediaMetadata.title?.toString().orEmpty(),
+        artist = mediaMetadata.artist?.toString().orEmpty(),
+        album = "YouTube Music",
+        durationMs = mediaMetadata.durationMs ?: 0L,
+        uri = localConfiguration?.uri ?: Uri.EMPTY,
+        artworkOverride = mediaMetadata.artworkUri,
+        // El códec real se conoce recién al resolver la URL, así que no se inventa acá.
+        streamCodecLabel = "YouTube Music",
+        albumId = 0L,
+        fileName = "",
+        mimeType = mediaMetadata.mimeType ?: "",
+    )
+}
+
+/** Un fling es ~2.2 pasos por segundo: lo suficientemente decidido para no activarse por accidente. */
+private const val SWIPE_FLING_FACTOR = 2.2f
+
+/** Con 0.18 la carátula acompaña al dedo pero deja claro que no hay tema siguiente/anterior. */
+private const val SWIPE_EDGE_RESISTANCE = 0.18f
+
+/** Espera (hasta ~600 ms) a que el reproductor publique el cambio de canción. */
+private suspend fun awaitIndexChange(controller: MediaController, previousIndex: Int): Boolean {
+    val deadline = System.currentTimeMillis() + 600
+    while (System.currentTimeMillis() < deadline) {
+        if (controller.currentMediaItemIndex != previousIndex) return true
+        delay(16)
+    }
+    return controller.currentMediaItemIndex != previousIndex
+}
+
 private fun playTrackList(controller: MediaController?, tracks: List<Track>, index: Int) {
     if (controller == null || tracks.isEmpty()) return
     QueueManager.playTracks(controller, tracks, index)
@@ -523,6 +588,8 @@ private data class PlaybackSnapshot(
     val current: Track?,
     val isPlaying: Boolean,
     val progress: Float,
+    /** Último error del reproductor (p. ej. un stream de YouTube Music que no se pudo resolver). */
+    val error: String? = null,
 )
 
 @Composable
@@ -531,8 +598,10 @@ private fun rememberPlaybackState(
     tracks: List<Track>,
 ): PlaybackSnapshot {
     var mediaId by remember { mutableStateOf<String?>(null) }
+    var currentItem by remember { mutableStateOf<MediaItem?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
     var progress by remember { mutableFloatStateOf(0f) }
+    var playError by remember { mutableStateOf<String?>(null) }
 
     DisposableEffect(controller) {
         if (controller == null) {
@@ -541,11 +610,18 @@ private fun rememberPlaybackState(
         val listener = object : Player.Listener {
             override fun onEvents(player: Player, events: Player.Events) {
                 mediaId = player.currentMediaItem?.mediaId
+                currentItem = player.currentMediaItem
                 isPlaying = player.isPlaying
+                if (player.playerError == null) playError = null
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                playError = error.message ?: error.errorCodeName
             }
         }
         controller.addListener(listener)
         mediaId = controller.currentMediaItem?.mediaId
+        currentItem = controller.currentMediaItem
         isPlaying = controller.isPlaying
         onDispose { controller.removeListener(listener) }
     }
@@ -559,8 +635,12 @@ private fun rememberPlaybackState(
         }
     }
 
+    // Primero la biblioteca local (por uri); si el ítem es un stream de YouTube Music no está
+    // en la lista, así que se reconstruye desde el MediaItem del reproductor.
     val current = tracks.firstOrNull { it.uri.toString() == mediaId }
-    return PlaybackSnapshot(current, isPlaying, progress)
+        ?: currentItem?.takeIf { it.localConfiguration?.uri?.scheme == YtmService.STREAM_SCHEME }
+            ?.toStreamTrack()
+    return PlaybackSnapshot(current, isPlaying, progress, playError)
 }
 
 @Composable
@@ -754,6 +834,9 @@ private fun YtmView(
     ytmTracks: List<YtmTrack>,
     ytmQuery: String,
     isSearching: Boolean,
+    errorMessage: String?,
+    playingVideoId: String?,
+    isPlaying: Boolean,
     onQueryChange: (String) -> Unit,
     onSearch: () -> Unit,
     onTrackClick: (YtmTrack) -> Unit,
@@ -772,6 +855,10 @@ private fun YtmView(
             trailingIcon = {
                 if (isSearching) {
                     CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Gold, strokeWidth = 2.dp)
+                } else {
+                    IconButton(onClick = onSearch) {
+                        Icon(Icons.Rounded.Search, contentDescription = "Buscar", tint = Gold)
+                    }
                 }
             },
             singleLine = true,
@@ -789,19 +876,54 @@ private fun YtmView(
             ),
         )
 
+        errorMessage?.let { message ->
+            Surface(
+                color = Gold.copy(alpha = 0.12f),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 4.dp),
+            ) {
+                Text(
+                    message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Cream,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                )
+            }
+        }
+
         LazyColumn(
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = bottomPadding.dp, top = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            if (ytmTracks.isEmpty()) {
+                item {
+                    Text(
+                        if (isSearching) "Buscando en YouTube Music..." else "Busca una canción, artista o álbum para reproducir desde YouTube Music.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = CreamMuted,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 24.dp),
+                    )
+                }
+            }
             items(ytmTracks, key = { it.id }) { track ->
-                YtmTrackRow(track = track, onClick = { onTrackClick(track) })
+                YtmTrackRow(
+                    track = track,
+                    isPlaying = track.id == playingVideoId && isPlaying,
+                    onClick = { onTrackClick(track) },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun YtmTrackRow(track: YtmTrack, onClick: () -> Unit) {
+private fun YtmTrackRow(
+    track: YtmTrack,
+    isPlaying: Boolean,
+    onClick: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -834,26 +956,36 @@ private fun YtmTrackRow(track: YtmTrack, onClick: () -> Unit) {
                 track.title,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
-                color = Cream,
+                color = if (isPlaying) Gold else Cream,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                "${track.artist} · ${track.album}",
+                listOf(track.artist, track.durationLabel).filter { it.isNotBlank() }.joinToString(" · "),
                 style = MaterialTheme.typography.bodyMedium,
                 color = CreamMuted,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                track.qualityLabel,
-                style = MaterialTheme.typography.labelSmall,
-                color = Gold.copy(alpha = 0.85f),
-                maxLines = 1,
-            )
+            Surface(
+                color = Gold.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(4.dp),
+            ) {
+                Text(
+                    "YouTube Music",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Gold,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+            }
         }
         IconButton(onClick = onClick) {
-            Icon(Icons.Rounded.PlayArrow, contentDescription = "Reproducir", tint = Gold, modifier = Modifier.size(28.dp))
+            Icon(
+                if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                contentDescription = if (isPlaying) "Pausar" else "Reproducir",
+                tint = Gold,
+                modifier = Modifier.size(28.dp),
+            )
         }
     }
 }
@@ -1476,7 +1608,10 @@ private fun NowPlayingSheet(
     var chromeVisible by remember { mutableStateOf(true) }
     var volume by remember { mutableFloatStateOf(controller.volume) }
     var lastVolume by remember { mutableFloatStateOf(1f) }
-    var dragX by remember { mutableFloatStateOf(0f) }
+    // Offset del gesto en px. Animatable permite seguirlo con el dedo (snapTo) y animarlo al
+    // soltar (animateTo) en vez de saltar de golpe al cambiar de canción.
+    val dragOffset = remember { Animatable(0f) }
+    val dragX = dragOffset.value
     val chromeScope = rememberCoroutineScope()
     var chromeRevealJob by remember { mutableStateOf<Job?>(null) }
 
@@ -1641,40 +1776,93 @@ private fun NowPlayingSheet(
                         Box(
                             modifier = Modifier
                                 .size(artworkSize)
-                                .pointerInput(track.uri.toString()) {
-                                    detectDragGestures(
-                                        onDragStart = { offset: Offset ->
-                                            dragX = 0f
-                                        },
-                                        onDrag = { change: PointerInputChange, dragAmount: Offset ->
-                                            if (abs(dragAmount.x) > 4f && abs(dragAmount.y) < 6f) {
-                                                change.consume()
-                                                dragX += dragAmount.x
-                                                // Umbral de confirmación: un porcentaje del ancho de la carátula.
-                                                // Estilo Apple Music: deslizar a la izquierda → siguiente,
-                                                // deslizar a la derecha → anterior.
-                                                if (dragX < -dragThreshold) {
-                                                    if (trackArtworkUriAt(+1) != null) {
-                                                        controller.seekToNext()
-                                                        dragX = 0f
-                                                    }
-                                                } else if (dragX > dragThreshold) {
-                                                    if (trackArtworkUriAt(-1) != null) {
-                                                        controller.seekToPrevious()
-                                                        dragX = 0f
-                                                    }
+                                .pointerInput(track.uri.toString(), artworkSize) {
+                                    val scope = this
+                                    val step = artworkWidthPx
+                                    val threshold = dragThreshold
+                                    val flingThreshold = step * SWIPE_FLING_FACTOR
+
+                                    suspend fun snapBack() {
+                                        dragOffset.animateTo(0f, spring(0.9f, Spring.StiffnessMediumLow))
+                                    }
+
+                                    // Lleva la carátula hasta el borde, cambia de canción y recién
+                                    // entonces vuelve el offset a cero: así nunca se ve el salto.
+                                    suspend fun commit(goNext: Boolean) {
+                                        dragOffset.animateTo(
+                                            if (goNext) -step else step,
+                                            tween(240, easing = FastOutSlowInEasing),
+                                        )
+                                        val previousIndex = controller.currentMediaItemIndex
+                                        if (goNext) controller.seekToNext() else controller.seekToPrevious()
+                                        if (awaitIndexChange(controller, previousIndex)) {
+                                            dragOffset.snapTo(0f)
+                                        } else {
+                                            snapBack()
+                                        }
+                                    }
+
+                                    awaitEachGesture {
+                                        val down = awaitFirstDown(requireUnconsumed = false)
+                                        val tracker = VelocityTracker()
+                                        tracker.addPosition(down.uptimeMillis, down.position)
+                                        var accumulatedX = 0f
+                                        var accumulatedY = 0f
+                                        var decided = false
+                                        var dragging = false
+
+                                        while (true) {
+                                            val event = awaitPointerEvent()
+                                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                            if (!change.pressed) break
+
+                                            tracker.addPosition(change.uptimeMillis, change.position)
+                                            val delta = change.positionChange()
+                                            accumulatedX += delta.x
+                                            accumulatedY += delta.y
+
+                                            if (!decided) {
+                                                val slop = viewConfiguration.touchSlop
+                                                val horizontal = abs(accumulatedX) > slop &&
+                                                    abs(accumulatedX) > abs(accumulatedY) * 1.2f
+                                                val vertical = abs(accumulatedY) > slop
+                                                if (horizontal) {
+                                                    decided = true
+                                                    dragging = true
+                                                } else if (vertical) {
+                                                    // Es un scroll vertical (p. ej. la letra): se
+                                                    // deja pasar al contenedor sin reclamar el gesto.
+                                                    decided = true
+                                                    dragging = false
                                                 }
-                                            } else {
-                                                dragX = 0f
                                             }
-                                        },
-                                        onDragEnd = {
-                                            dragX = 0f
-                                        },
-                                        onDragCancel = {
-                                            dragX = 0f
-                                        },
-                                    )
+
+                                            if (!dragging) continue
+
+                                            change.consume()
+                                            // En el primer/último tema la carátula se resiste: avisa
+                                            // que ahí no hay nada más en vez de quedarse pegada.
+                                            val blocked =
+                                                (accumulatedX > 0f && !controller.hasPreviousMediaItem()) ||
+                                                    (accumulatedX < 0f && !controller.hasNextMediaItem())
+                                            val next = if (blocked) accumulatedX * SWIPE_EDGE_RESISTANCE else accumulatedX
+                                            dragOffset.snapTo(next)
+                                        }
+
+                                        if (!dragging) return@awaitEachGesture
+
+                                        val velocity = tracker.calculateVelocity().x
+                                        val goNext = dragOffset.value < -threshold || velocity < -flingThreshold
+                                        val goPrevious = dragOffset.value > threshold || velocity > flingThreshold
+
+                                        scope.launch {
+                                            when {
+                                                goNext && controller.hasNextMediaItem() -> commit(goNext = true)
+                                                goPrevious && controller.hasPreviousMediaItem() -> commit(goNext = false)
+                                                else -> snapBack()
+                                            }
+                                        }
+                                    }
                                 },
                         ) {
                             val progress = (abs(dragX) / artworkWidthPx).coerceIn(0f, 1f)
@@ -2006,12 +2194,18 @@ private fun AudioSignalPathSheet(
                 }
             } else "Estéreo (2.0)"
 
+            val isStream = track != null && !track.isLocal
             val codecStr = track?.codecLabel ?: "FLAC / Audio"
-            val bitrateStr = if (track != null && track.bitrate > 0) "${track.bitrate / 1000} kbps" else "Variable / Lossless"
-            val decoderName = if (codecStr in listOf("FLAC", "DSD", "APE", "WavPack", "ALAC", "TrueHD", "DTS", "Opus")) {
-                "NextLib Native FFmpeg Decoder"
-            } else {
-                "ExoPlayer Media3 Native Audio Decoder"
+            val bitrateStr = when {
+                isStream -> "Variable (Opus/AAC)"
+                track != null && track.bitrate > 0 -> "${track.bitrate / 1000} kbps"
+                else -> "Variable / Lossless"
+            }
+            val decoderName = when {
+                isStream -> "ExoPlayer · stream progresivo (YouTube Music)"
+                codecStr in listOf("FLAC", "DSD", "APE", "WavPack", "ALAC", "TrueHD", "DTS", "Opus") ->
+                    "NextLib Native FFmpeg Decoder"
+                else -> "ExoPlayer Media3 Native Audio Decoder"
             }
 
             LazyColumn(
@@ -2457,6 +2651,7 @@ private fun MetadataInspectorDialog(
                             analysis = analysis?.takeIf { it.uri == track.uri },
                             scrollable = false,
                             onAnalyzeClick = onAnalyzeClick,
+                            canAnalyze = track.isLocal,
                         )
                     }
                     item {

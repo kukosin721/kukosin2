@@ -28,12 +28,20 @@ data class Track(
     val filePath: String = "",
     val fileSize: Long = 0L,
     val comment: String = "",
+    /** Carátula externa (p. ej. thumbnail de YouTube Music); si está, gana sobre la del álbum. */
+    val artworkOverride: Uri? = null,
+    /** Códec ya resuelto por el servicio de streaming (WebM/Opus, etc.). */
+    val streamCodecLabel: String = "",
 ) {
     val artworkUri: Uri
-        get() = "content://media/external/audio/albumart/$albumId".toUri()
+        get() = artworkOverride ?: "content://media/external/audio/albumart/$albumId".toUri()
 
     val codecLabel: String
-        get() = codecFrom(fileName, mimeType, bitDepth, bitrate)
+        get() = streamCodecLabel.ifBlank { codecFrom(fileName, mimeType, bitDepth, bitrate) }
+
+    /** true si el audio es un archivo del dispositivo (no un stream de red). */
+    val isLocal: Boolean
+        get() = uri.scheme == "content" || uri.scheme == "file"
 
     val effectiveArtist: String
         get() = artist.ifBlank { albumArtist.ifBlank { "Artista desconocido" } }

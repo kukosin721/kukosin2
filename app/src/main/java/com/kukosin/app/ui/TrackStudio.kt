@@ -395,6 +395,8 @@ fun AnalysisPanel(
     modifier: Modifier = Modifier,
     onAnalyzeClick: (() -> Unit)? = null,
     scrollable: Boolean = true,
+    /** false para streams de red (YouTube Music): no hay PCM local que analizar. */
+    canAnalyze: Boolean = true,
 ) {
     if (analysis?.isAnalyzing == true) {
         Box(modifier = modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
@@ -445,24 +447,29 @@ fun AnalysisPanel(
                 }
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    if (hasSpectrum) analysis?.verdictDetail.orEmpty()
-                    else "Analiza las muestras PCM y el espectro de frecuencias FFT para verificar si el archivo es 100% auténtico, si fue upsampleado o si es un transcode de MP3/AAC.",
+                    when {
+                        !canAnalyze -> "Este audio llega por streaming desde YouTube Music, así que no hay muestras PCM locales para analizar. El análisis espectral y de autenticidad funciona con archivos del dispositivo (FLAC, WAV, MP3, etc.)."
+                        hasSpectrum -> analysis?.verdictDetail.orEmpty()
+                        else -> "Analiza las muestras PCM y el espectro de frecuencias FFT para verificar si el archivo es 100% auténtico, si fue upsampleado o si es un transcode de MP3/AAC."
+                    },
                     color = Cream,
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                Spacer(Modifier.height(12.dp))
-                Button(
-                    onClick = { onAnalyzeClick?.invoke() },
-                    colors = ButtonDefaults.buttonColors(containerColor = Gold, contentColor = Ink),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Icon(Icons.Rounded.GraphicEq, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        if (hasSpectrum) "Re-analizar Espectro y Autenticidad" else "🔍 Verificar Autenticidad y Espectro",
-                        fontWeight = FontWeight.Bold,
-                    )
+                if (canAnalyze) {
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = { onAnalyzeClick?.invoke() },
+                        colors = ButtonDefaults.buttonColors(containerColor = Gold, contentColor = Ink),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Rounded.GraphicEq, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            if (hasSpectrum) "Re-analizar Espectro y Autenticidad" else "🔍 Verificar Autenticidad y Espectro",
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
                 }
             }
         }
