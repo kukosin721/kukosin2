@@ -6,6 +6,7 @@ import androidx.media3.common.util.UnstableApi
 import android.Manifest
 import android.content.ComponentName
 import android.net.Uri
+import android.util.Log
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -37,9 +38,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.animate
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.NavigateNext
@@ -130,15 +132,14 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.util.VelocityTracker
-import androidx.compose.animation.core.Animatable
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import com.kukosin.app.data.ytm.YtmService
@@ -1615,12 +1616,13 @@ private fun NowPlayingSheet(
     // Dentro de `awaitEachGesture` (AwaitPointerEventScope está restringido) no se pueden
     // llamar suspend functions ajenas, así que el dedo escribe estado plano y la animación de
     // cierre se lanza al salir del gesto. Se pinta una u otra según si hay animación en curso.
-    // PointerInputScope no es CoroutineScope, así que las animaciones de cierre se lanzan
-    // en un scope de la composición (se cancela solo cuando el sheet sale de pantalla).
+    // Scope de la composición para las animaciones de cierre (PointerInputScope no es un
+    // CoroutineScope y el de los gestos está restringido).
     val gestureScope = rememberCoroutineScope()
-    var liveDrag by remember { mutableFloatStateOf(0f) }
-    val settleOffset = remember { Animatable(0f) }
-    val dragX = if (settleOffset.isRunning) settleOffset.value else liveDrag
+    // Única fuente de verdad del desplazamiento: el gesto la escribe mientras el dedo
+    // arrastra y la animación de cierre la escribe frame a frame. Antes había dos estados
+    // (dedo + animación) y la carátula quedaba congelada a mitad de camino.
+    var dragX by remember { mutableFloatStateOf(0f) }
     val chromeScope = rememberCoroutineScope()
     var chromeRevealJob by remember { mutableStateOf<Job?>(null) }
 
@@ -1789,107 +1791,93 @@ private fun NowPlayingSheet(
                                     val step = artworkWidthPx
                                     val threshold = dragThreshold
                                     val flingThreshold = step * SWIPE_FLING_FACTOR
+                                    val tracker = VelocityTracker()
+
+                                    // Anima dragX desde donde esté hasta target (se puede llamar
+                                    // desde el scope de la composición, no desde el gesto).
+                                    suspend fun animateDragTo(target: Float, spec: AnimationSpec<Float>) {
+                                        val from = dragX
+                                        animate(from, target, animationSpec = spec) { value, _ ->
+                                            dragX = value
+                                        }
+                                    }
 
                                     suspend fun snapBack() {
-                                        settleOffset.snapTo(liveDrag)
-                                        settleOffset.animateTo(0f, spring(0.9f, Spring.StiffnessMediumLow))
-                                        liveDrag = 0f
+                                        animateDragTo(0f, spring(0.9f, Spring.StiffnessMediumLow))
                                     }
 
                                     // Lleva la carátula hasta el borde, cambia de canción y recién
-                                    // entonces vuelve el offset a cero: así nunca se ve el salto.
+                                    // después vuelve a cero, para que no se vea el salto.
                                     suspend fun commit(goNext: Boolean) {
-                                        settleOffset.snapTo(liveDrag)
-                                        settleOffset.animateTo(
+                                        animateDragTo(
                                             if (goNext) -step else step,
                                             tween(240, easing = FastOutSlowInEasing),
                                         )
-                                        val previousIndex = controller.currentMediaItemIndex
-                                        if (goNext) controller.seekToNext() else controller.seekToPrevious()
-                                        if (awaitIndexChange(controller, previousIndex)) {
-                                            settleOffset.snapTo(0f)
-                                            liveDrag = 0f
+                                        val switched = try {
+                                            val previousIndex = controller.currentMediaItemIndex
+                                            if (goNext) controller.seekToNext() else controller.seekToPrevious()
+                                            awaitIndexChange(controller, previousIndex)
+                                        } catch (throwable: Throwable) {
+                                            false
+                                        }
+                                        Log.d(
+                                            "KukosinSwipe",
+                                            "commit ${if (goNext) "siguiente" else "anterior"}: " +
+                                                "se cambio=$switched, indice=${controller.currentMediaItemIndex}",
+                                        )
+                                        if (switched) {
+                                            // Un frame para que el sheet ya esté pintando la
+                                            // canción nueva antes de volver el offset a cero.
+                                            withFrameNanos { }
+                                            dragX = 0f
                                         } else {
-                                            // El seek no ocurrió: la carátula vuelve sola.
-                                            settleOffset.animateTo(0f, spring(0.9f, Spring.StiffnessMediumLow))
-                                            liveDrag = 0f
+                                            snapBack()
                                         }
                                     }
 
-                                    while (true) {
-                                        var released = false
-                                        var velocityX = 0f
-
-                                        // Fase 1: medir. Dentro de awaitEachGesture el scope está
-                                        // restringido, así que acá NO se puede animar ni lanzar
-                                        // corrutinas: sólo se escribe el estado del arrastre.
-                                        awaitEachGesture {
-                                            val down = awaitFirstDown(requireUnconsumed = false)
-                                            val tracker = VelocityTracker()
-                                            tracker.addPosition(down.uptimeMillis, down.position)
-                                            var accumulatedX = 0f
-                                            var accumulatedY = 0f
-                                            var decided = false
-                                            var dragging = false
-
-                                            while (true) {
-                                                val event = awaitPointerEvent()
-                                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                                if (!change.pressed) break
-
-                                                tracker.addPosition(change.uptimeMillis, change.position)
-                                                val delta = change.positionChange()
-                                                accumulatedX += delta.x
-                                                accumulatedY += delta.y
-
-                                                if (!decided) {
-                                                    val slop = viewConfiguration.touchSlop
-                                                    val horizontal = abs(accumulatedX) > slop &&
-                                                        abs(accumulatedX) > abs(accumulatedY) * 1.2f
-                                                    if (horizontal) {
-                                                        decided = true
-                                                        dragging = true
-                                                    } else if (abs(accumulatedY) > slop) {
-                                                        // Scroll vertical (letra, cola): se deja
-                                                        // pasar sin reclamar el gesto.
-                                                        decided = true
-                                                        dragging = false
-                                                    }
-                                                }
-
-                                                if (!dragging) continue
-
-                                                change.consume()
-                                                // En el primer/último tema la carátula se resiste:
-                                                // avisa que ahí no hay nada más.
-                                                val blocked =
-                                                    (accumulatedX > 0f && !controller.hasPreviousMediaItem()) ||
-                                                        (accumulatedX < 0f && !controller.hasNextMediaItem())
-                                                liveDrag = if (blocked) {
-                                                    accumulatedX * SWIPE_EDGE_RESISTANCE
-                                                } else {
-                                                    accumulatedX
+                                    detectHorizontalDragGestures(
+                                        onDragStart = {
+                                            tracker.resetTracking()
+                                            dragX = 0f
+                                        },
+                                        onHorizontalDrag = { change, dragAmount ->
+                                            change.consume()
+                                            tracker.addPosition(change.uptimeMillis, change.position)
+                                            val raw = dragX + dragAmount
+                                            // En el primer/último tema la carátula se resiste.
+                                            val blocked =
+                                                (raw > 0f && !controller.hasPreviousMediaItem()) ||
+                                                    (raw < 0f && !controller.hasNextMediaItem())
+                                            dragX = if (blocked) {
+                                                dragX + dragAmount * SWIPE_EDGE_RESISTANCE
+                                            } else {
+                                                raw
+                                            }
+                                        },
+                                        onDragEnd = {
+                                            val velocity = tracker.calculateVelocity().x
+                                            val goNext = dragX < -threshold || velocity < -flingThreshold
+                                            val goPrevious = dragX > threshold || velocity > flingThreshold
+                                            Log.d(
+                                                "KukosinSwipe",
+                                                "soltar: drag=${dragX.toInt()}px (umbral ${threshold.toInt()}) " +
+                                                    "vel=${velocity.toInt()} nuevo=$goNext anterior=$goPrevious " +
+                                                    "haySiguiente=${controller.hasNextMediaItem()} " +
+                                                    "hayAnterior=${controller.hasPreviousMediaItem()}",
+                                            )
+                                            gestureScope.launch {
+                                                when {
+                                                    goNext && controller.hasNextMediaItem() -> commit(goNext = true)
+                                                    goPrevious && controller.hasPreviousMediaItem() ->
+                                                        commit(goNext = false)
+                                                    else -> snapBack()
                                                 }
                                             }
-
-                                            if (dragging) {
-                                                velocityX = tracker.calculateVelocity().x
-                                                released = true
-                                            }
-                                        }
-
-                                        // Fase 2: decidir y animar, ya fuera del scope restringido.
-                                        if (!released) continue
-                                        val goNext = liveDrag < -threshold || velocityX < -flingThreshold
-                                        val goPrevious = liveDrag > threshold || velocityX > flingThreshold
-                                        when {
-                                            goNext && controller.hasNextMediaItem() ->
-                                                gestureScope.launch { commit(goNext = true) }
-                                            goPrevious && controller.hasPreviousMediaItem() ->
-                                                gestureScope.launch { commit(goNext = false) }
-                                            else -> gestureScope.launch { snapBack() }
-                                        }
-                                    }
+                                        },
+                                        onDragCancel = {
+                                            gestureScope.launch { snapBack() }
+                                        },
+                                    )
                                 },
                         ) {
                             val progress = (abs(dragX) / artworkWidthPx).coerceIn(0f, 1f)

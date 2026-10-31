@@ -32,7 +32,7 @@ Agregué logs con dos tags para que puedas seguir qué pasa:
 
 ```bash
 adb logcat -c                                   # limpiar
-adb logcat -s KukosinYtm:D KukosinPlayback:D AndroidRuntime:E
+adb logcat -s KukosinYtm:D KukosinPlayback:D KukosinSwipe:D AndroidRuntime:E
 ```
 
 En Android Studio: pestaña **Logcat** → filtro `tag:KukosinYtm | tag:KukosinPlayback`.
@@ -101,6 +101,10 @@ Esos tiempos son los que medí de verdad desde un JVM contra el extractor real
    siente "gomoso" y vuelve sin cambiar.
 4. Repite lo mismo con una canción de **YouTube Music** (ahora la cola es toda la
    búsqueda, así que debe funcionar igual).
+4b. Cada vez que soltás la carátula, en el log sale `KukosinSwipe: soltar: drag=…px
+   (umbral …) vel=… nuevo=… anterior=… haySiguiente=… hayAnterior=…` y después
+   `commit …: se cambio=true, indice=N`. Si `se cambio=false`, el problema es la cola,
+   no el gesto; si no aparece la línea de `commit`, el gesto no llegó a decidir.
 5. **Coexistencia de gestos** (esto es de la fusión): dentro del sheet, el arrastre
    **vertical** debe seguir haciendo scroll (letra, cola, ruta de señal) y el
    **horizontal sobre la carátula** cambia de tema. En la lista de la cola, el swipe

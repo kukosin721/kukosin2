@@ -40,7 +40,7 @@ NowPlayingSheet
 
 | Pieza | Valor |
 |---|---|
-| Detección | `awaitEachGesture` + `VelocityTracker` (permite decidir horizontal vs vertical) |
+| Detección | `detectHorizontalDragGestures` + `VelocityTracker` (deja el scroll vertical al sheet) |
 | Paso | ancho real de la carátula (`artworkSize.toPx()`) |
 | Umbral para cambiar | 35 % del ancho (`dragThreshold`, el que ya tenías) **o** fling de 2.2× ancho/seg |
 | Si pasa el umbral | `tween(240 ms, FastOutSlowInEasing)` hasta ±ancho → `seekToNext()` / `seekToPrevious()` |
@@ -48,16 +48,30 @@ NowPlayingSheet
 | Sin pista en esa dirección | resistencia elástica (18 % del arrastre) y vuelve al centro |
 | Scroll vertical | el gesto no se reclama: la letra/cola siguen scrolleando normal |
 
+## Una sola fuente de verdad
+
+`dragX` es un único `mutableFloatStateOf`: lo escribe el dedo mientras arrastras y lo escribe
+la animación de cierre frame a frame con `animate()` dentro de un `rememberCoroutineScope()`.
+
+La primera versión mezclaba dos estados (`liveDrag` del dedo + un `Animatable` con `isRunning`
+para decidir cuál se pintaba). Si el `Animatable` no llegaba a arrancar, la composición seguía
+leyendo el valor del dedo y la carátula **quedaba congelada a medio camino**. Se eliminó ese
+acoplamiento.
+
 ## El detalle que evita el parpadeo
 
 Al soltar, el orden importa:
 
 ```kotlin
-dragOffset.animateTo(-step, tween(240, easing = FastOutSlowInEasing))  // la vecina queda centrada
+animateDragTo(-step, tween(240, easing = FastOutSlowInEasing))   // la vecina queda centrada
 val previousIndex = controller.currentMediaItemIndex
 controller.seekToNext()
-if (awaitIndexChange(controller, previousIndex)) dragOffset.snapTo(0f)  // recién ahora se resetea
-else snapBack()                                                        // el seek no ocurrió: volver
+if (awaitIndexChange(controller, previousIndex)) {               // ¿cambió de verdad?
+    withFrameNanos { }                                          // un frame para repintar
+    dragX = 0f                                                  // recién ahora se resetea
+} else {
+    snapBack()                                                  // el seek no ocurrió: volver
+}
 ```
 
 `MediaController` aplica los comandos de forma asíncrona (cruzan Binder). Si se hiciera
