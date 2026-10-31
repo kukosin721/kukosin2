@@ -1708,6 +1708,16 @@ private fun NowPlayingSheet(
     val artworkWidthPx = with(LocalDensity.current) { artworkSize.toPx() }
     val dragThreshold = (artworkWidthPx * 0.35f).coerceAtLeast(60f)
 
+    // ── Waveform real de la canción (silencio = plano, no picos falsos) ─────
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var realWaveform by remember(track.uri) { mutableStateOf<List<Float>?>(null) }
+    LaunchedEffect(track.uri) {
+        realWaveform = null
+        if (track.isLocal) {
+            realWaveform = com.kukosin.app.data.analysis.WaveformExtractor.getWaveform(context, track, 180)
+        }
+    }
+
     LaunchedEffect(controller, showLyrics) {
         while (isActive) {
             if (!seeking) {
@@ -1715,7 +1725,7 @@ private fun NowPlayingSheet(
                 duration = controller.duration.coerceAtLeast(0)
             }
             repeatMode = controller.repeatMode
-            delay(if (showLyrics) 80L else 250L)
+            delay(if (showLyrics) 50L else 32L) // 30fps para movimiento fluido de la onda
         }
     }
 
@@ -1982,7 +1992,8 @@ private fun NowPlayingSheet(
                         KukosinWaveformSlider(
                             progress = if (duration > 0) position.toFloat() / duration else 0f,
                             onSeek = { controller.seekTo((it * duration).toLong()) },
-                            trackKey = track.uri.toString(), // onda única por canción (no todas iguales)
+                            waveform = realWaveform, // real si local (silencio=plano), fallback único por trackKey
+                            trackKey = track.uri.toString(),
                             isPlaying = isPlaying,
                             onPlayPause = { if (controller.isPlaying) controller.pause() else controller.play() },
                             onPrev = { controller.seekToPrevious() },

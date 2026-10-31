@@ -3,6 +3,11 @@
 
 package com.kukosin.app.ui.component
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -27,6 +32,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -62,11 +68,35 @@ fun KukosinWaveformSlider(
     positionLabel: String = "",
 ) {
     val clamped = progress.coerceIn(0f, 1f)
-    // Estado de drag: null = quieto, valor = progreso durante arrastre (no hace salto)
     var dragProgress by remember { mutableStateOf<Float?>(null) }
+    val isDragging = dragProgress != null
+    // displayProgress es lo que se ve mientras arrastras; fuera de drag es clamped
     val displayProgress = dragProgress ?: clamped
 
-    // Onda única por canción: seed derivado del trackKey
+    // ── Suavidad: animación fluida de la onda (no stutter cada 250ms) ─────
+    // Cuando no arrastras, el progreso se anima con tween 600ms para movimiento sedoso.
+    // Al arrastrar, snap instantáneo para seguir el dedo sin lag.
+    val animatedProgress by animateFloatAsState(
+        targetValue = displayProgress,
+        animationSpec = if (isDragging) snap() else tween(durationMillis = 520, easing = FastOutSlowInEasing),
+        label = "waveProgressSmooth"
+    )
+    // Para el gesto, usamos el valor objetivo (no el animado) para cálculo preciso
+    val progressForGestures = displayProgress
+    val animatedProgressForDraw = animatedProgress
+
+    // Fade out/in al pausar/reproducir
+    val contentAlpha by animateFloatAsState(
+        targetValue = if (isPlaying) 1f else 0.58f,
+        animationSpec = tween(durationMillis = 500, easing = FastOutSlowInEasing),
+        label = "waveFade"
+    )
+    val waveScale by animateFloatAsState(
+        targetValue = if (isPlaying) 1f else 0.96f,
+        animationSpec = tween(durationMillis = 500, easing = FastOutSlowInEasing),
+        label = "waveScale"
+    )
+
     val bars = remember(waveform, trackKey) {
         if (waveform != null) {
             if (waveform.size >= 160) waveform else expandWaveform(waveform, 180)
@@ -76,8 +106,7 @@ fun KukosinWaveformSlider(
         }
     }
 
-    // Para que el gesto no reinicie al cambiar displayProgress, usamos updatedState
-    val currentDisplayProgress by rememberUpdatedState(displayProgress)
+    val currentDisplayProgress by rememberUpdatedState(progressForGestures)
     val currentClamped by rememberUpdatedState(clamped)
 
     // Dimensiones grandes (lo que pediste)
@@ -101,44 +130,44 @@ fun KukosinWaveformSlider(
                 )
             )
             .border(1.dp, Line.copy(alpha = 0.6f), RoundedCornerShape(20.dp))
+            .graphicsLayer {
+                alpha = contentAlpha
+                scaleX = waveScale
+                scaleY = waveScale
+            }
     ) {
         // ── 1. ONDA ────────────────────────────────────────────────────────
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(bars) {
-                    val sensitivity = 0.32f
+                    val sensitivity = 0.22f // más lenta y precisa (antes 0.32)
                     var startProgress = 0f
-                    var accumulatedDx = 0f
 
                     detectHorizontalDragGestures(
                         onDragStart = {
                             startProgress = currentDisplayProgress
-                            accumulatedDx = 0f
                             dragProgress = startProgress
                         },
                         onDragEnd = {
-                            dragProgress?.let { onSeek(it.coerceIn(0f, 1f)) }
+                            // INSTANTÁNEO: sin animación, seek directo
+                            val final = dragProgress
                             dragProgress = null
+                            if (final != null) onSeek(final.coerceIn(0f, 1f))
                         },
-                        onDragCancel = {
-                            dragProgress = null
-                        }
+                        onDragCancel = { dragProgress = null }
                     ) { change, dragAmount ->
                         change.consume()
-                        accumulatedDx += dragAmount
                         val delta = -dragAmount * sensitivity / size.width.toFloat()
-                        val newP = (dragProgress!! + delta).coerceIn(0f, 1f)
-                        dragProgress = newP
+                        dragProgress = (dragProgress!! + delta).coerceIn(0f, 1f)
                     }
                 }
                 .pointerInput(bars, trackKey) {
                     detectTapGestures { offset ->
                         val centerX = size.width / 2f
-                        val delta = (offset.x - centerX) * 0.32f / size.width.toFloat()
+                        val delta = (offset.x - centerX) * 0.22f / size.width.toFloat()
                         val base = currentClamped
-                        val newP = (base + delta).coerceIn(0f, 1f)
-                        onSeek(newP)
+                        onSeek((base + delta).coerceIn(0f, 1f))
                     }
                 }
         ) {
@@ -151,7 +180,7 @@ fun KukosinWaveformSlider(
             val waveH = waveHDp.toPx()
             val waveCenterY = waveTop + waveH / 2f
             val centerX = w / 2f
-            val startX = centerX - displayProgress * contentW
+            val startX = centerX - animatedProgressForDraw * contentW
 
             // glow detrás de aguja
             drawRect(
