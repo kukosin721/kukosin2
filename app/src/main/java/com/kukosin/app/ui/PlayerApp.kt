@@ -187,11 +187,23 @@ import com.kukosin.app.ui.theme.accentColor
 import com.kukosin.app.ui.theme.Ink
 import com.kukosin.app.ui.theme.InkElevated
 import com.kukosin.app.ui.theme.InkSoft
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.sin
 
 @Composable
 fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
@@ -259,6 +271,113 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
     val audioConfig by viewModel.audioConfig.collectAsStateWithLifecycle()
     var showSettings by remember { mutableStateOf(false) }
 
+    val density = LocalDensity.current
+    val playerSheetScope = rememberCoroutineScope()
+    // Única fuente de verdad para la transición MiniPlayer ↔ Reproductor (0f = cerrado, 1f = abierto).
+    var sheetProgress by remember { mutableFloatStateOf(0f) }
+    var isSheetDragging by remember { mutableStateOf(false) }
+    var wasSheetDragged by remember { mutableStateOf(false) }
+    var sheetAnimJob by remember { mutableStateOf<Job?>(null) }
+
+    var rootCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var rootSizePx by remember { mutableStateOf(IntSize.Zero) }
+    var miniArtRestingRect by remember { mutableStateOf(Rect.Zero) }
+    var fullArtSlotRect by remember { mutableStateOf(Rect.Zero) }
+
+    val playPauseScale by animateFloatAsState(
+        targetValue = if (playback.isPlaying) 1f else 0.92f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow,
+        ),
+        label = "artworkPlayPauseScale",
+    )
+
+    fun animatePlayerSheet(target: Float, initialVelocity: Float = 0f, fromDrag: Boolean = false) {
+        sheetAnimJob?.cancel()
+        isSheetDragging = false
+        wasSheetDragged = fromDrag
+        showNowPlaying = target > 0.5f
+        val from = sheetProgress
+        if (abs(from - target) < 0.0005f) {
+            sheetProgress = target
+            wasSheetDragged = false
+            return
+        }
+        sheetAnimJob = playerSheetScope.launch {
+            animate(
+                initialValue = from,
+                targetValue = target,
+                initialVelocity = initialVelocity.coerceIn(-8f, 8f),
+                animationSpec = spring(
+                    dampingRatio = 0.90f,
+                    stiffness = 380f,
+                ),
+            ) { value, _ ->
+                sheetProgress = value.coerceIn(0f, 1f)
+            }
+            sheetProgress = target
+            wasSheetDragged = false
+        }
+    }
+
+    LaunchedEffect(playback.current == null) {
+        if (playback.current == null) {
+            sheetAnimJob?.cancel()
+            showNowPlaying = false
+            isSheetDragging = false
+            wasSheetDragged = false
+            sheetProgress = 0f
+        }
+    }
+
+    val dragRangePx = (rootSizePx.height * 0.68f).takeIf { it > 240f }
+        ?: with(density) { 520.dp.toPx() }
+    val currentDragRangePx by rememberUpdatedState(dragRangePx)
+
+    val maxArtDp = if (rootSizePx.height > 0 && rootSizePx.width > 0) {
+        with(density) {
+            minOf(
+                340.dp.toPx(),
+                rootSizePx.width - 48.dp.toPx(),
+                (rootSizePx.height - 470.dp.toPx()).coerceAtLeast(210.dp.toPx()),
+            ).toDp()
+        }
+    } else {
+        320.dp
+    }
+
+    val resolveMiniArtRect: () -> Rect = {
+        if (miniArtRestingRect != Rect.Zero) {
+            miniArtRestingRect
+        } else {
+            val sizePx = with(density) { 48.dp.toPx() }
+            val left = with(density) { 28.dp.toPx() }
+            val bottom = (rootSizePx.height.takeIf { it > 0 } ?: 1800) - with(density) { 36.dp.toPx() }
+            Rect(left, bottom - sizePx, left + sizePx, bottom)
+        }
+    }
+
+    val resolveFullArtSlotRect: () -> Rect = {
+        if (fullArtSlotRect != Rect.Zero) {
+            fullArtSlotRect
+        } else {
+            val artPx = with(density) { maxArtDp.toPx() }
+            val w = (rootSizePx.width.takeIf { it > 0 } ?: 1080).toFloat()
+            val h = (rootSizePx.height.takeIf { it > 0 } ?: 2200).toFloat()
+            val left = ((w - artPx) * 0.5f).coerceAtLeast(0f)
+            val top = h * 0.12f
+            Rect(left, top, left + artPx, top + artPx)
+        }
+    }
+
+    BackHandler(
+        enabled = (showNowPlaying || sheetProgress > 0.05f) &&
+            !showQueueSheet && !showSignalPath && !showSettings,
+    ) {
+        animatePlayerSheet(target = 0f, fromDrag = false)
+    }
+
     LaunchedEffect(playback.current?.uri) {
         // Los streams de YouTube Music no tienen archivo ni PCM local: pedir metadatos/análisis
         // solo gastaba trabajo y podía dejar la pantalla "analizando" para siempre.
@@ -271,9 +390,18 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
         }
     }
 
+    // `controller` es un var delegado: no admite smart cast, así que se captura en locales
+    // en vez de forzar con `!!` (que rompería si algo cambia entre el chequeo y el uso).
+    val sheetController = controller
+    val sheetTrack = playback.current
+
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .onGloballyPositioned { coords ->
+                rootCoords = coords
+                rootSizePx = coords.size
+            }
             .background(
                 Brush.verticalGradient(
                     listOf(Ink, InkElevated, Ink),
@@ -394,19 +522,147 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
         }
 
         playback.current?.let { current ->
-            MiniPlayer(
-                track = current,
-                isPlaying = playback.isPlaying,
-                progress = playback.progress,
-                isDac = output.isDac,
-                onToggle = { controller?.let { if (it.isPlaying) it.pause() else it.play() } },
-                onNext = { controller?.seekToNext() },
-                onOpen = { showNowPlaying = true },
-                onOpenSignalPath = { showSignalPath = true },
+            if (sheetProgress < 0.999f) {
+                MiniPlayer(
+                    track = current,
+                    isPlaying = playback.isPlaying,
+                    progress = playback.progress,
+                    isDac = output.isDac,
+                    sheetProgress = sheetProgress,
+                    onToggle = { controller?.let { if (it.isPlaying) it.pause() else it.play() } },
+                    onNext = { controller?.seekToNext() },
+                    onOpen = { animatePlayerSheet(target = 1f, fromDrag = false) },
+                    onOpenSignalPath = { showSignalPath = true },
+                    onArtMeasured = { artCoords ->
+                        if (sheetProgress <= 0.001f) {
+                            val root = rootCoords
+                            if (root != null && root.isAttached && artCoords.isAttached) {
+                                miniArtRestingRect = root.localBoundingBoxOf(artCoords, clipBounds = false)
+                            }
+                        }
+                    },
+                    onVerticalDragStart = {
+                        sheetAnimJob?.cancel()
+                        isSheetDragging = true
+                        wasSheetDragged = true
+                    },
+                    onVerticalDragDelta = { dragAmountPx ->
+                        val range = currentDragRangePx
+                        val next = (sheetProgress - dragAmountPx / range).coerceIn(0f, 1f)
+                        sheetProgress = next
+                        if (next > 0.01f) showNowPlaying = true
+                    },
+                    onVerticalDragEnd = { velocityYPxPerSec ->
+                        val range = currentDragRangePx
+                        val progressVel = -velocityYPxPerSec / range
+                        val shouldOpen = velocityYPxPerSec < -520f ||
+                            (sheetProgress > 0.24f && velocityYPxPerSec < 420f)
+                        animatePlayerSheet(
+                            target = if (shouldOpen) 1f else 0f,
+                            initialVelocity = progressVel,
+                            fromDrag = true,
+                        )
+                    },
+                    onVerticalDragCancel = {
+                        animatePlayerSheet(
+                            target = if (sheetProgress > 0.5f) 1f else 0f,
+                            fromDrag = true,
+                        )
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                )
+            }
+        }
+
+        // Scrim progresivo sobre la biblioteca mientras el reproductor se abre o cierra.
+        if (sheetTrack != null && sheetProgress > 0.001f) {
+            val blockBackgroundTouches = showNowPlaying || sheetProgress > 0.08f || isSheetDragging
+            Box(
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .navigationBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        alpha = (sheetProgress.coerceIn(0f, 1f) * 0.68f).coerceIn(0f, 0.68f)
+                    }
+                    .background(Color.Black)
+                    .then(
+                        if (blockBackgroundTouches) {
+                            Modifier.pointerInput(Unit) {
+                                detectTapGestures {
+                                    animatePlayerSheet(target = 0f, fromDrag = false)
+                                }
+                            }
+                        } else {
+                            Modifier
+                        },
+                    ),
+            )
+        }
+
+        if ((showNowPlaying || sheetProgress > 0.001f || isSheetDragging) &&
+            sheetTrack != null && sheetController != null
+        ) {
+            NowPlayingSheet(
+                track = sheetTrack,
+                controller = sheetController,
+                isPlaying = playback.isPlaying,
+                output = output,
+                analysis = analysis,
+                audioConfig = audioConfig,
+                sheetProgress = sheetProgress,
+                interactiveEnabled = showNowPlaying || sheetProgress > 0.08f || isSheetDragging,
+                maxArtDp = maxArtDp,
+                playPauseScale = playPauseScale,
+                miniArtRectProvider = resolveMiniArtRect,
+                fullArtSlotRectProvider = resolveFullArtSlotRect,
+                onFullArtSlotMeasured = { measuredRect ->
+                    fullArtSlotRect = measuredRect
+                },
+                onVerticalDragStart = {
+                    sheetAnimJob?.cancel()
+                    isSheetDragging = true
+                    wasSheetDragged = true
+                },
+                onVerticalDragDelta = { dragAmountPx ->
+                    val range = currentDragRangePx
+                    sheetProgress = (sheetProgress - dragAmountPx / range).coerceIn(0f, 1f)
+                },
+                onVerticalDragEnd = { velocityYPxPerSec ->
+                    val range = currentDragRangePx
+                    val progressVel = -velocityYPxPerSec / range
+                    val shouldClose = velocityYPxPerSec > 520f ||
+                        (sheetProgress < 0.74f && velocityYPxPerSec > -420f)
+                    animatePlayerSheet(
+                        target = if (shouldClose) 0f else 1f,
+                        initialVelocity = progressVel,
+                        fromDrag = true,
+                    )
+                },
+                onVerticalDragCancel = {
+                    animatePlayerSheet(
+                        target = if (sheetProgress > 0.5f) 1f else 0f,
+                        fromDrag = true,
+                    )
+                },
+                onDismiss = { animatePlayerSheet(target = 0f, fromDrag = false) },
+                onOpenQueue = { showQueueSheet = true },
+                onOpenSignalPath = { showSignalPath = true },
+            )
+        }
+
+        // Carátula compartida en vuelo diagonal (MiniPlayer 48dp izq ↔ Reproductor grande)
+        // con desenfoque dinámico durante el arrastre, idéntico al GIF de referencia.
+        if (sheetTrack != null && sheetProgress > 0.001f && sheetProgress < 0.998f) {
+            SharedTransitionArtwork(
+                track = sheetTrack,
+                sheetProgress = sheetProgress,
+                isSheetDragging = isSheetDragging,
+                wasSheetDragged = wasSheetDragged,
+                playPauseScale = playPauseScale,
+                miniArtRectProvider = resolveMiniArtRect,
+                fullArtSlotRectProvider = resolveFullArtSlotRect,
             )
         }
 
@@ -417,7 +673,7 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
-                .padding(bottom = if (playback.current != null) 92.dp else 24.dp, start = 16.dp, end = 16.dp),
+                .padding(bottom = if (playback.current != null && sheetProgress < 0.2f) 92.dp else 24.dp, start = 16.dp, end = 16.dp),
         ) {
             Surface(
                 color = InkElevated,
@@ -453,25 +709,6 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
                 }
             }
         }
-    }
-
-    // `controller` es un var delegado: no admite smart cast, así que se captura en locales
-    // en vez de forzar con `!!` (que rompería si algo cambia entre el chequeo y el uso).
-    val sheetController = controller
-    val sheetTrack = playback.current
-
-    if (showNowPlaying && sheetTrack != null && sheetController != null) {
-        NowPlayingSheet(
-            track = sheetTrack,
-            controller = sheetController,
-            isPlaying = playback.isPlaying,
-            output = output,
-            analysis = analysis,
-            audioConfig = audioConfig,
-            onDismiss = { showNowPlaying = false },
-            onOpenQueue = { showQueueSheet = true },
-            onOpenSignalPath = { showSignalPath = true },
-        )
     }
 
     if (showQueueSheet && sheetController != null) {
@@ -1513,15 +1750,34 @@ private fun FolderRow(folder: FolderNode, onClick: () -> Unit) {
     }
 }
 
+private fun lerpFloat(start: Float, stop: Float, fraction: Float): Float =
+    start + (stop - start) * fraction
+
+private fun lerpRect(start: Rect, stop: Rect, fraction: Float): Rect = Rect(
+    left = lerpFloat(start.left, stop.left, fraction),
+    top = lerpFloat(start.top, stop.top, fraction),
+    right = lerpFloat(start.right, stop.right, fraction),
+    bottom = lerpFloat(start.bottom, stop.bottom, fraction),
+)
+
+private fun scaleRectAroundCenter(rect: Rect, scale: Float): Rect {
+    val cx = rect.center.x
+    val cy = rect.center.y
+    val hw = rect.width * scale * 0.5f
+    val hh = rect.height * scale * 0.5f
+    return Rect(cx - hw, cy - hh, cx + hw, cy + hh)
+}
+
 @Composable
 internal fun Artwork(
     track: Track,
     modifier: Modifier = Modifier,
     artworkUri: Uri? = null,
+    cornerRadius: Dp = 12.dp,
 ) {
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
+            .then(if (cornerRadius > 0.dp) Modifier.clip(RoundedCornerShape(cornerRadius)) else Modifier)
             .background(InkSoft),
         contentAlignment = Alignment.Center,
     ) {
@@ -1536,19 +1792,126 @@ internal fun Artwork(
 }
 
 @Composable
+private fun SharedTransitionArtwork(
+    track: Track,
+    sheetProgress: Float,
+    isSheetDragging: Boolean,
+    wasSheetDragged: Boolean,
+    playPauseScale: Float,
+    miniArtRectProvider: () -> Rect,
+    fullArtSlotRectProvider: () -> Rect,
+) {
+    val p = sheetProgress.coerceIn(0f, 1f)
+    val edgeRamp = minOf(p / 0.08f, (1f - p) / 0.06f).coerceIn(0f, 1f)
+    val midArc = sin(p * PI).toFloat().coerceIn(0f, 1f)
+    val targetBlurVal = when {
+        p <= 0.002f || p >= 0.998f -> 0f
+        isSheetDragging -> 16f * edgeRamp
+        wasSheetDragged -> 12f * midArc
+        else -> 4.5f * midArc
+    }
+    val transitBlur by animateDpAsState(
+        targetValue = targetBlurVal.dp,
+        animationSpec = tween(durationMillis = 90),
+        label = "sharedArtworkTransitBlur",
+    )
+
+    // Tamaño base fijo (340.dp) para cargar siempre la carátula en alta resolución y
+    // escalar/trasladar 100% en GPU vía graphicsLayer sin re-layout por frame.
+    val baseArtDp = 340.dp
+    Box(
+        modifier = Modifier
+            .size(baseArtDp)
+            .graphicsLayer {
+                val prog = sheetProgress.coerceIn(0f, 1f)
+                val miniR = miniArtRectProvider()
+                val fullR = scaleRectAroundCenter(fullArtSlotRectProvider(), playPauseScale)
+                val curR = lerpRect(miniR, fullR, prog)
+                val basePx = baseArtDp.toPx().coerceAtLeast(1f)
+                val sx = (curR.width / basePx).coerceAtLeast(0.05f)
+                val sy = (curR.height / basePx).coerceAtLeast(0.05f)
+                translationX = curR.left
+                translationY = curR.top
+                scaleX = sx
+                scaleY = sy
+                transformOrigin = TransformOrigin(0f, 0f)
+                val desiredCornerDp = 12.dp + (20.dp - 12.dp) * prog
+                shape = RoundedCornerShape(desiredCornerDp / sx)
+                clip = true
+                shadowElevation = (4.dp + 20.dp * sin(prog * PI).toFloat()).toPx()
+            },
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .then(
+                    if (transitBlur > 0.2.dp) {
+                        Modifier.blur(transitBlur, edgeTreatment = BlurredEdgeTreatment.Rectangle)
+                    } else {
+                        Modifier
+                    },
+                ),
+        ) {
+            Artwork(
+                track = track,
+                modifier = Modifier.fillMaxSize(),
+                cornerRadius = 0.dp,
+            )
+        }
+    }
+}
+
+@Composable
 private fun MiniPlayer(
     track: Track,
     isPlaying: Boolean,
     progress: Float,
     isDac: Boolean,
+    sheetProgress: Float,
     onToggle: () -> Unit,
     onNext: () -> Unit,
     onOpen: () -> Unit,
     onOpenSignalPath: () -> Unit,
+    onArtMeasured: (LayoutCoordinates) -> Unit,
+    onVerticalDragStart: () -> Unit,
+    onVerticalDragDelta: (Float) -> Unit,
+    onVerticalDragEnd: (Float) -> Unit,
+    onVerticalDragCancel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val currentOnDragStart by rememberUpdatedState(onVerticalDragStart)
+    val currentOnDragDelta by rememberUpdatedState(onVerticalDragDelta)
+    val currentOnDragEnd by rememberUpdatedState(onVerticalDragEnd)
+    val currentOnDragCancel by rememberUpdatedState(onVerticalDragCancel)
+
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                val p = sheetProgress.coerceIn(0f, 1f)
+                alpha = (1f - (p / 0.28f)).coerceIn(0f, 1f)
+                translationY = -p * 42.dp.toPx()
+            }
+            .pointerInput(Unit) {
+                val tracker = VelocityTracker()
+                detectVerticalDragGestures(
+                    onDragStart = {
+                        tracker.resetTracking()
+                        currentOnDragStart()
+                    },
+                    onVerticalDrag = { change, dragAmount ->
+                        change.consume()
+                        tracker.addPosition(change.uptimeMillis, change.position)
+                        currentOnDragDelta(dragAmount)
+                    },
+                    onDragEnd = {
+                        currentOnDragEnd(tracker.calculateVelocity().y)
+                    },
+                    onDragCancel = {
+                        currentOnDragCancel()
+                    },
+                )
+            },
         shape = RoundedCornerShape(24.dp),
         color = InkSoft,
         tonalElevation = 0.dp,
@@ -1563,11 +1926,20 @@ private fun MiniPlayer(
             )
             Row(
                 modifier = Modifier
-                    .clickable(onClick = onOpen)
+                    .clickable(enabled = sheetProgress < 0.08f, onClick = onOpen)
                     .padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Artwork(track, Modifier.size(48.dp))
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .onGloballyPositioned(onArtMeasured)
+                        .graphicsLayer {
+                            alpha = if (sheetProgress > 0.001f) 0f else 1f
+                        },
+                ) {
+                    Artwork(track, Modifier.fillMaxSize())
+                }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1585,14 +1957,14 @@ private fun MiniPlayer(
                     }
                     Text("${track.effectiveArtist} · ${track.codecLabel}", maxLines = 1, overflow = TextOverflow.Ellipsis, color = CreamMuted, style = MaterialTheme.typography.bodyMedium)
                 }
-                IconButton(onClick = onToggle) {
+                IconButton(onClick = onToggle, enabled = sheetProgress < 0.1f) {
                     Icon(
                         if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                         contentDescription = if (isPlaying) "Pausar" else "Reproducir",
                         tint = Gold,
                     )
                 }
-                IconButton(onClick = onNext) {
+                IconButton(onClick = onNext, enabled = sheetProgress < 0.1f) {
                     Icon(Icons.Rounded.SkipNext, contentDescription = "Siguiente", tint = Cream)
                 }
             }
@@ -1609,36 +1981,49 @@ private fun NowPlayingSheet(
     output: OutputDevice,
     analysis: com.kukosin.app.data.analysis.AudioAnalysis?,
     audioConfig: com.kukosin.app.playback.AudioConfig,
+    sheetProgress: Float,
+    interactiveEnabled: Boolean,
+    maxArtDp: Dp,
+    playPauseScale: Float,
+    miniArtRectProvider: () -> Rect,
+    fullArtSlotRectProvider: () -> Rect,
+    onFullArtSlotMeasured: (Rect) -> Unit,
+    onVerticalDragStart: () -> Unit,
+    onVerticalDragDelta: (Float) -> Unit,
+    onVerticalDragEnd: (Float) -> Unit,
+    onVerticalDragCancel: () -> Unit,
     onDismiss: () -> Unit,
     onOpenQueue: () -> Unit,
     onOpenSignalPath: () -> Unit,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var position by remember { mutableLongStateOf(controller.currentPosition) }
     var duration by remember { mutableLongStateOf(controller.duration.coerceAtLeast(0)) }
-    val shuffle by QueueManager.shuffleEnabled.collectAsStateWithLifecycle()
-    var repeatMode by remember { mutableStateOf(controller.repeatMode) }
-    var seeking by remember { mutableStateOf(false) }
-    var slider by remember { mutableFloatStateOf(0f) }
-    var isExpanded by remember { mutableStateOf(false) }
     var showLyrics by remember { mutableStateOf(false) }
     var chromeVisible by remember { mutableStateOf(true) }
-    var volume by remember { mutableFloatStateOf(controller.volume) }
-    var lastVolume by remember { mutableFloatStateOf(1f) }
-    // Dentro de `awaitEachGesture` (AwaitPointerEventScope está restringido) no se pueden
-    // llamar suspend functions ajenas, así que el dedo escribe estado plano y la animación de
-    // cierre se lanza al salir del gesto. Se pinta una u otra según si hay animación en curso.
-    // Scope de la composición para las animaciones de cierre (PointerInputScope no es un
-    // CoroutineScope y el de los gestos está restringido).
     val gestureScope = rememberCoroutineScope()
-    // Única fuente de verdad del desplazamiento: el gesto la escribe mientras el dedo
-    // arrastra y la animación de cierre la escribe frame a frame. Antes había dos estados
-    // (dedo + animación) y la carátula quedaba congelada a mitad de camino.
     var dragX by remember { mutableFloatStateOf(0f) }
     val chromeScope = rememberCoroutineScope()
     var chromeRevealJob by remember { mutableStateOf<Job?>(null) }
 
+    var sheetStaticCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+
+    val currentOnVDragStart by rememberUpdatedState(onVerticalDragStart)
+    val currentOnVDragDelta by rememberUpdatedState(onVerticalDragDelta)
+    val currentOnVDragEnd by rememberUpdatedState(onVerticalDragEnd)
+    val currentOnVDragCancel by rememberUpdatedState(onVerticalDragCancel)
+
     val currentLyrics = analysis?.takeIf { it.uri == track.uri }?.lyrics
+
+    BackHandler(enabled = showLyrics && sheetProgress > 0.9f) {
+        showLyrics = false
+    }
+
+    // Si empieza a cerrarse estando en letras, volvemos a la carátula para que vuele al MiniPlayer.
+    LaunchedEffect(sheetProgress < 0.96f) {
+        if (sheetProgress < 0.96f && showLyrics) {
+            showLyrics = false
+        }
+    }
 
     LaunchedEffect(showLyrics) {
         chromeRevealJob?.cancel()
@@ -1658,27 +2043,6 @@ private fun NowPlayingSheet(
         }
     }
 
-    LaunchedEffect(Unit) {
-        isExpanded = true
-    }
-
-    val artworkSize by animateDpAsState(
-        targetValue = if (isExpanded) (if (isPlaying) 340.dp else 280.dp) else 80.dp,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessLow,
-        ),
-        label = "appleMusicArtworkExpand",
-    )
-    val artworkScale by animateFloatAsState(
-        targetValue = if (isExpanded) (if (isPlaying) 1f else 0.94f) else 0.5f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioLowBouncy,
-            stiffness = Spring.StiffnessLow,
-        ),
-        label = "artworkScale",
-    )
-
     val artworkBlur by animateDpAsState(
         targetValue = if (dragX != 0f) abs(dragX).coerceAtMost(12f).dp else 0.dp,
         animationSpec = tween(120),
@@ -1696,8 +2060,6 @@ private fun NowPlayingSheet(
         if (index !in 0 until controller.mediaItemCount) return null
         val item = controller.getMediaItemAt(index)
         val itemUri = item.localConfiguration?.uri
-        // En los archivos locales la metadata lleva la carátula del sistema (chica); para
-        // dibujar se usa la embebida, igual que el resto de la interfaz.
         return if (itemUri != null && (itemUri.scheme == "content" || itemUri.scheme == "file")) {
             EmbeddedArtwork.uriFor(itemUri)
         } else {
@@ -1705,11 +2067,11 @@ private fun NowPlayingSheet(
         }
     }
 
-    val artworkWidthPx = with(LocalDensity.current) { artworkSize.toPx() }
+    val artworkWidthPx = with(LocalDensity.current) { maxArtDp.toPx() }
     val dragThreshold = (artworkWidthPx * 0.35f).coerceAtLeast(60f)
 
     // ── Waveform real de la canción (silencio = plano, no picos falsos) ─────
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
     var realWaveform by remember(track.uri) { mutableStateOf<List<Float>?>(null) }
     LaunchedEffect(track.uri) {
         realWaveform = null
@@ -1720,57 +2082,196 @@ private fun NowPlayingSheet(
 
     LaunchedEffect(controller, showLyrics) {
         while (isActive) {
-            if (!seeking) {
-                position = controller.currentPosition
-                duration = controller.duration.coerceAtLeast(0)
-            }
-            repeatMode = controller.repeatMode
+            position = controller.currentPosition
+            duration = controller.duration.coerceAtLeast(0)
             delay(if (showLyrics) 50L else 32L) // 30fps para movimiento fluido de la onda
         }
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = Ink,
-        contentColor = Cream,
-        modifier = Modifier.fillMaxHeight(),
+    val verticalDismissModifier = if (interactiveEnabled) {
+        Modifier.pointerInput(showLyrics) {
+            if (showLyrics) return@pointerInput
+            val tracker = VelocityTracker()
+            detectVerticalDragGestures(
+                onDragStart = {
+                    tracker.resetTracking()
+                    currentOnVDragStart()
+                },
+                onVerticalDrag = { change, dragAmount ->
+                    change.consume()
+                    tracker.addPosition(change.uptimeMillis, change.position)
+                    currentOnVDragDelta(dragAmount)
+                },
+                onDragEnd = {
+                    currentOnVDragEnd(tracker.calculateVelocity().y)
+                },
+                onDragCancel = {
+                    currentOnVDragCancel()
+                },
+            )
+        }
+    } else {
+        Modifier
+    }
+
+    val headerDismissModifier = if (interactiveEnabled) {
+        Modifier.pointerInput(Unit) {
+            val tracker = VelocityTracker()
+            detectVerticalDragGestures(
+                onDragStart = {
+                    tracker.resetTracking()
+                    currentOnVDragStart()
+                },
+                onVerticalDrag = { change, dragAmount ->
+                    change.consume()
+                    tracker.addPosition(change.uptimeMillis, change.position)
+                    currentOnVDragDelta(dragAmount)
+                },
+                onDragEnd = {
+                    currentOnVDragEnd(tracker.calculateVelocity().y)
+                },
+                onDragCancel = {
+                    currentOnVDragCancel()
+                },
+            )
+        }
+    } else {
+        Modifier
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onGloballyPositioned { coords ->
+                sheetStaticCoords = coords
+            }
+            .then(verticalDismissModifier),
     ) {
+        // Fondo deslizante del reproductor: acompaña el borde superior de la carátula en tránsito
+        // con esquinas redondeadas y fade progresivo, tal como en el GIF.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    val p = sheetProgress.coerceIn(0f, 1f)
+                    val miniR = miniArtRectProvider()
+                    val fullR = scaleRectAroundCenter(fullArtSlotRectProvider(), playPauseScale)
+                    val curR = lerpRect(miniR, fullR, p)
+                    val topDelta = (curR.top - fullR.top).coerceAtLeast(0f)
+                    translationY = topDelta
+                    alpha = ((p - 0.04f) / 0.76f).coerceIn(0f, 1f)
+                    val topCorner = 28.dp * (1f - p)
+                    shape = RoundedCornerShape(topStart = topCorner, topEnd = topCorner)
+                    clip = true
+                }
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(InkElevated, Ink, Ink),
+                    ),
+                )
+                .then(
+                    if (interactiveEnabled) {
+                        Modifier.pointerInput(Unit) {
+                            detectTapGestures { /* absorbe toques internos para no cerrar el scrim */ }
+                        }
+                    } else {
+                        Modifier
+                    },
+                ),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .graphicsLayer {
+                        alpha = (1f - sheetProgress.coerceIn(0f, 1f)) * 0.6f
+                    }
+                    .background(Line),
+            )
+        }
+
+        // Contenido principal SIN graphicsLayer intermedio sobre el slot de carátula, de modo
+        // que `localBoundingBoxOf` mida siempre su destino real estático en p = 1f.
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .statusBarsPadding()
                 .navigationBarsPadding()
                 .padding(horizontal = 24.dp, vertical = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+            // Cabecera + píldora de arrastre ("EN REPRODUCCIÓN"): viaja pegada sobre la carátula
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(headerDismissModifier)
+                    .graphicsLayer {
+                        val p = sheetProgress.coerceIn(0f, 1f)
+                        val miniR = miniArtRectProvider()
+                        val fullR = scaleRectAroundCenter(fullArtSlotRectProvider(), playPauseScale)
+                        val curR = lerpRect(miniR, fullR, p)
+                        translationY = (curR.top - fullR.top).coerceAtLeast(0f)
+                        alpha = ((p - 0.12f) / 0.72f).coerceIn(0f, 1f)
+                    },
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                IconButton(onClick = onDismiss) {
-                    Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Minimizar", tint = CreamMuted, modifier = Modifier.size(32.dp))
-                }
-
-                Text(
-                    "EN REPRODUCCIÓN",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Gold,
-                    fontWeight = FontWeight.Bold,
+                Box(
+                    modifier = Modifier
+                        .padding(top = 6.dp, bottom = 2.dp)
+                        .width(38.dp)
+                        .height(4.5.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(CreamMuted.copy(alpha = 0.45f)),
                 )
 
-                IconButton(onClick = onOpenQueue) {
-                    if (audioConfig.showQueueBadge && controller.mediaItemCount > 0) {
-                        BadgedBox(
-                            badge = {
-                                Badge(
-                                    containerColor = Gold,
-                                    contentColor = Ink,
-                                ) {
-                                    Text("${controller.mediaItemCount}", fontWeight = FontWeight.Bold)
-                                }
-                            },
-                        ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = onDismiss, enabled = interactiveEnabled) {
+                        Icon(
+                            Icons.Rounded.KeyboardArrowDown,
+                            contentDescription = "Minimizar",
+                            tint = CreamMuted,
+                            modifier = Modifier.size(32.dp),
+                        )
+                    }
+
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            "EN REPRODUCCIÓN",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Gold,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            if (track.isLocal) "Música local" else "YouTube Music",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = CreamMuted,
+                        )
+                    }
+
+                    IconButton(onClick = onOpenQueue, enabled = interactiveEnabled) {
+                        if (audioConfig.showQueueBadge && controller.mediaItemCount > 0) {
+                            BadgedBox(
+                                badge = {
+                                    Badge(
+                                        containerColor = Gold,
+                                        contentColor = Ink,
+                                    ) {
+                                        Text("${controller.mediaItemCount}", fontWeight = FontWeight.Bold)
+                                    }
+                                },
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
+                                    contentDescription = "Cola de reproducción",
+                                    tint = Gold,
+                                    modifier = Modifier.size(26.dp),
+                                )
+                            }
+                        } else {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
                                 contentDescription = "Cola de reproducción",
@@ -1778,152 +2279,132 @@ private fun NowPlayingSheet(
                                 modifier = Modifier.size(26.dp),
                             )
                         }
-                    } else {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
-                            contentDescription = "Cola de reproducción",
-                            tint = Gold,
-                            modifier = Modifier.size(26.dp),
-                        )
                     }
                 }
             }
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(8.dp))
 
-            AnimatedContent(
-                targetState = showLyrics,
-                transitionSpec = { fadeIn() togetherWith fadeOut() },
-                label = "artworkLyricsTransition",
+            Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-            ) { showingLyrics ->
-                if (showingLyrics) {
-                    LyricsPanel(
-                        lyrics = currentLyrics,
-                        positionMs = position,
-                        onLineClick = { timeMs -> controller.seekTo(timeMs) },
-                        onScrollActivity = onLyricsScroll,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                } else {
+            ) {
+                val artworkAndControlsContent: @Composable () -> Unit = {
                     Column(
                         modifier = Modifier.fillMaxSize(),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
                     ) {
+                        // Slot estático de la carátula expandida (sin graphicsLayer ancestral).
                         Box(
                             modifier = Modifier
-                                .size(artworkSize)
-                                .pointerInput(track.uri.toString(), artworkSize) {
-                                    val step = artworkWidthPx
-                                    val threshold = dragThreshold
-                                    val flingThreshold = step * SWIPE_FLING_FACTOR
-                                    val tracker = VelocityTracker()
-
-                                    // Anima dragX desde donde esté hasta target (se puede llamar
-                                    // desde el scope de la composición, no desde el gesto).
-                                    suspend fun animateDragTo(target: Float, spec: AnimationSpec<Float>) {
-                                        val from = dragX
-                                        animate(from, target, animationSpec = spec) { value, _ ->
-                                            dragX = value
-                                        }
-                                    }
-
-                                    suspend fun snapBack() {
-                                        animateDragTo(0f, spring(0.9f, Spring.StiffnessMediumLow))
-                                    }
-
-                                    // Lleva la carátula hasta el borde, cambia de canción y recién
-                                    // después vuelve a cero, para que no se vea el salto.
-                                    suspend fun commit(goNext: Boolean) {
-                                        animateDragTo(
-                                            if (goNext) -step else step,
-                                            tween(240, easing = FastOutSlowInEasing),
+                                .size(maxArtDp)
+                                .onGloballyPositioned { artCoords ->
+                                    val root = sheetStaticCoords
+                                    if (root != null && root.isAttached && artCoords.isAttached) {
+                                        onFullArtSlotMeasured(
+                                            root.localBoundingBoxOf(artCoords, clipBounds = false),
                                         )
-                                        val switched = try {
-                                            val previousIndex = controller.currentMediaItemIndex
-                                            if (goNext) controller.seekToNext() else controller.seekToPrevious()
-                                            awaitIndexChange(controller, previousIndex)
-                                        } catch (throwable: Throwable) {
-                                            false
-                                        }
-                                        Log.d(
-                                            "KukosinSwipe",
-                                            "commit ${if (goNext) "siguiente" else "anterior"}: " +
-                                                "se cambio=$switched, indice=${controller.currentMediaItemIndex}",
-                                        )
-                                        if (switched) {
-                                            // Un frame para que el sheet ya esté pintando la
-                                            // canción nueva antes de volver el offset a cero.
-                                            withFrameNanos { }
-                                            dragX = 0f
-                                        } else {
-                                            snapBack()
-                                        }
                                     }
+                                }
+                                .then(
+                                    if (sheetProgress >= 0.98f) {
+                                        Modifier.pointerInput(track.uri.toString(), maxArtDp) {
+                                            val step = artworkWidthPx
+                                            val threshold = dragThreshold
+                                            val flingThreshold = step * SWIPE_FLING_FACTOR
+                                            val tracker = VelocityTracker()
 
-                                    detectHorizontalDragGestures(
-                                        onDragStart = {
-                                            tracker.resetTracking()
-                                            dragX = 0f
-                                        },
-                                        onHorizontalDrag = { change, dragAmount ->
-                                            change.consume()
-                                            tracker.addPosition(change.uptimeMillis, change.position)
-                                            val raw = dragX + dragAmount
-                                            // En el primer/último tema la carátula se resiste.
-                                            val blocked =
-                                                (raw > 0f && !controller.hasPreviousMediaItem()) ||
-                                                    (raw < 0f && !controller.hasNextMediaItem())
-                                            dragX = if (blocked) {
-                                                dragX + dragAmount * SWIPE_EDGE_RESISTANCE
-                                            } else {
-                                                raw
-                                            }
-                                        },
-                                        onDragEnd = {
-                                            val velocity = tracker.calculateVelocity().x
-                                            val goNext = dragX < -threshold || velocity < -flingThreshold
-                                            val goPrevious = dragX > threshold || velocity > flingThreshold
-                                            Log.d(
-                                                "KukosinSwipe",
-                                                "soltar: drag=${dragX.toInt()}px (umbral ${threshold.toInt()}) " +
-                                                    "vel=${velocity.toInt()} nuevo=$goNext anterior=$goPrevious " +
-                                                    "haySiguiente=${controller.hasNextMediaItem()} " +
-                                                    "hayAnterior=${controller.hasPreviousMediaItem()}",
-                                            )
-                                            gestureScope.launch {
-                                                when {
-                                                    goNext && controller.hasNextMediaItem() -> commit(goNext = true)
-                                                    goPrevious && controller.hasPreviousMediaItem() ->
-                                                        commit(goNext = false)
-                                                    else -> snapBack()
+                                            suspend fun animateDragTo(target: Float, spec: AnimationSpec<Float>) {
+                                                val from = dragX
+                                                animate(from, target, animationSpec = spec) { value, _ ->
+                                                    dragX = value
                                                 }
                                             }
-                                        },
-                                        onDragCancel = {
-                                            gestureScope.launch { snapBack() }
-                                        },
-                                    )
-                                },
+
+                                            suspend fun snapBack() {
+                                                animateDragTo(0f, spring(0.9f, Spring.StiffnessMediumLow))
+                                            }
+
+                                            suspend fun commit(goNext: Boolean) {
+                                                animateDragTo(
+                                                    if (goNext) -step else step,
+                                                    tween(240, easing = FastOutSlowInEasing),
+                                                )
+                                                val switched = try {
+                                                    val previousIndex = controller.currentMediaItemIndex
+                                                    if (goNext) controller.seekToNext() else controller.seekToPrevious()
+                                                    awaitIndexChange(controller, previousIndex)
+                                                } catch (throwable: Throwable) {
+                                                    false
+                                                }
+                                                Log.d(
+                                                    "KukosinSwipe",
+                                                    "commit ${if (goNext) "siguiente" else "anterior"}: " +
+                                                        "se cambio=$switched, indice=${controller.currentMediaItemIndex}",
+                                                )
+                                                if (switched) {
+                                                    withFrameNanos { }
+                                                    dragX = 0f
+                                                } else {
+                                                    snapBack()
+                                                }
+                                            }
+
+                                            detectHorizontalDragGestures(
+                                                onDragStart = {
+                                                    tracker.resetTracking()
+                                                    dragX = 0f
+                                                },
+                                                onHorizontalDrag = { change, dragAmount ->
+                                                    change.consume()
+                                                    tracker.addPosition(change.uptimeMillis, change.position)
+                                                    val raw = dragX + dragAmount
+                                                    val blocked =
+                                                        (raw > 0f && !controller.hasPreviousMediaItem()) ||
+                                                            (raw < 0f && !controller.hasNextMediaItem())
+                                                    dragX = if (blocked) {
+                                                        dragX + dragAmount * SWIPE_EDGE_RESISTANCE
+                                                    } else {
+                                                        raw
+                                                    }
+                                                },
+                                                onDragEnd = {
+                                                    val velocity = tracker.calculateVelocity().x
+                                                    val goNext = dragX < -threshold || velocity < -flingThreshold
+                                                    val goPrevious = dragX > threshold || velocity > flingThreshold
+                                                    gestureScope.launch {
+                                                        when {
+                                                            goNext && controller.hasNextMediaItem() -> commit(goNext = true)
+                                                            goPrevious && controller.hasPreviousMediaItem() ->
+                                                                commit(goNext = false)
+                                                            else -> snapBack()
+                                                        }
+                                                    }
+                                                },
+                                                onDragCancel = {
+                                                    gestureScope.launch { snapBack() }
+                                                },
+                                            )
+                                        }
+                                    } else {
+                                        Modifier
+                                    },
+                                ),
                         ) {
                             val progress = (abs(dragX) / artworkWidthPx).coerceIn(0f, 1f)
                             val direction = if (dragX > 0f) 1 else if (dragX < 0f) -1 else 0
 
-                            // Carátula de la canción destino (siguiente / anterior). Se desliza desde el
-                            // lado opuesto al gesto y va ocupando el centro mientras arrastras.
-                            // Izquierda → siguiente (entra desde la derecha); derecha → anterior (entra desde la izquierda).
                             val incomingUri = when (direction) {
                                 1 -> trackArtworkUriAt(-1)
                                 -1 -> trackArtworkUriAt(+1)
                                 else -> null
                             }
-                            if (incomingUri != null && dragX != 0f) {
+                            if (incomingUri != null && dragX != 0f && sheetProgress >= 0.998f) {
                                 Box(
                                     modifier = Modifier
-                                        .size(artworkSize)
+                                        .size(maxArtDp)
                                         .clip(RoundedCornerShape(20.dp))
                                         .graphicsLayer {
                                             translationX = if (dragX > 0f) dragX - artworkWidthPx else dragX + artworkWidthPx
@@ -1939,150 +2420,227 @@ private fun NowPlayingSheet(
                                 }
                             }
 
-                            // Carátula actual: se mueve con el dedo, se desenfoca y se desvanece al salir.
+                            // Durante el vuelo (sheetProgress < 0.998f) se oculta esta copia interna
+                            // porque SharedTransitionArtwork dibuja la carátula viajando en diagonal.
                             Box(
                                 modifier = Modifier
-                                    .size(artworkSize)
-                                    .clip(RoundedCornerShape(20.dp))
+                                    .size(maxArtDp)
                                     .blur(artworkBlur, edgeTreatment = BlurredEdgeTreatment.Unbounded)
                                     .graphicsLayer {
+                                        val inFlight = sheetProgress < 0.998f
+                                        val s = playPauseScale.coerceAtLeast(0.1f)
                                         translationX = dragX
-                                        scaleX = artworkScale
-                                        scaleY = artworkScale
-                                        alpha = artworkAlpha
+                                        scaleX = s
+                                        scaleY = s
+                                        shape = RoundedCornerShape(20.dp / s)
+                                        clip = true
+                                        alpha = if (inFlight) 0f else artworkAlpha
                                     },
                             ) {
                                 Artwork(
-                                    track,
-                                    Modifier.fillMaxSize(),
+                                    track = track,
+                                    modifier = Modifier.fillMaxSize(),
+                                    cornerRadius = 0.dp,
                                 )
                             }
                         }
-                        Spacer(Modifier.height(20.dp))
-                        Text(track.title, style = MaterialTheme.typography.headlineMedium, color = Cream, fontWeight = FontWeight.Bold, maxLines = 2)
-                        Spacer(Modifier.height(4.dp))
-                        Text("${track.effectiveArtist} — ${track.album}", style = MaterialTheme.typography.bodyLarge, color = CreamMuted, maxLines = 1)
-                        Spacer(Modifier.height(8.dp))
-                        Surface(
-                            color = InkSoft,
-                            shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, Gold.copy(alpha = 0.5f)),
-                            modifier = Modifier.clickable(onClick = onOpenSignalPath),
+
+                        // Bloque inferior (título, ruta de señal y waveform): viaja anclado justo
+                        // debajo del borde inferior de la carátula en tránsito, igual que en el GIF.
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .graphicsLayer {
+                                    val p = sheetProgress.coerceIn(0f, 1f)
+                                    val miniR = miniArtRectProvider()
+                                    val fullR = scaleRectAroundCenter(fullArtSlotRectProvider(), playPauseScale)
+                                    val curR = lerpRect(miniR, fullR, p)
+                                    translationY = curR.bottom - fullR.bottom
+                                    alpha = ((p - 0.10f) / 0.72f).coerceIn(0f, 1f)
+                                },
+                            horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
+                            Spacer(Modifier.height(20.dp))
+                            Text(
+                                track.title,
+                                style = MaterialTheme.typography.headlineMedium,
+                                color = Cream,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 2,
+                                textAlign = TextAlign.Center,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "${track.effectiveArtist} — ${track.album}",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = CreamMuted,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Surface(
+                                color = InkSoft,
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, Gold.copy(alpha = 0.5f)),
+                                modifier = Modifier.clickable(enabled = interactiveEnabled, onClick = onOpenSignalPath),
                             ) {
-                                Icon(
-                                    imageVector = if (output.isDac) Icons.Rounded.Usb else Icons.Rounded.GraphicEq,
-                                    contentDescription = null,
-                                    tint = Gold,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    if (output.isDac) "Bit-Perfect hacia ${output.name} (Ver Ruta ↓)" else "Salida · ${output.name} (Ver Ruta ↓)",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = Gold,
-                                    fontWeight = FontWeight.Bold,
-                                )
-                            }
-                        }
-                        Spacer(Modifier.height(16.dp))
-                        KukosinWaveformSlider(
-                            progress = if (duration > 0) position.toFloat() / duration else 0f,
-                            onSeek = { controller.seekTo((it * duration).toLong()) },
-                            waveform = realWaveform, // real si local (silencio=plano), fallback único por trackKey
-                            trackKey = track.uri.toString(),
-                            isPlaying = isPlaying,
-                            onPlayPause = { if (controller.isPlaying) controller.pause() else controller.play() },
-                            onPrev = { controller.seekToPrevious() },
-                            onNext = { controller.seekToNext() },
-                            onShuffle = { QueueManager.toggleShuffle(controller) },
-                            onRepeat = {
-                                controller.repeatMode = when (controller.repeatMode) {
-                                    Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
-                                    Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
-                                    else -> Player.REPEAT_MODE_OFF
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Icon(
+                                        imageVector = if (output.isDac) Icons.Rounded.Usb else Icons.Rounded.GraphicEq,
+                                        contentDescription = null,
+                                        tint = Gold,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        if (output.isDac) "Bit-Perfect hacia ${output.name} (Ver Ruta ↓)" else "Salida · ${output.name} (Ver Ruta ↓)",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = Gold,
+                                        fontWeight = FontWeight.Bold,
+                                    )
                                 }
-                            },
-                            positionLabel = formatTime(position),
-                            durationLabel = formatTime(duration),
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                            }
+                            Spacer(Modifier.height(16.dp))
+                            KukosinWaveformSlider(
+                                progress = if (duration > 0) position.toFloat() / duration else 0f,
+                                onSeek = { if (interactiveEnabled) controller.seekTo((it * duration).toLong()) },
+                                waveform = realWaveform,
+                                trackKey = track.uri.toString(),
+                                isPlaying = isPlaying,
+                                onPlayPause = {
+                                    if (interactiveEnabled) {
+                                        if (controller.isPlaying) controller.pause() else controller.play()
+                                    }
+                                },
+                                onPrev = { if (interactiveEnabled) controller.seekToPrevious() },
+                                onNext = { if (interactiveEnabled) controller.seekToNext() },
+                                onShuffle = { if (interactiveEnabled) QueueManager.toggleShuffle(controller) },
+                                onRepeat = {
+                                    if (interactiveEnabled) {
+                                        controller.repeatMode = when (controller.repeatMode) {
+                                            Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
+                                            Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+                                            else -> Player.REPEAT_MODE_OFF
+                                        }
+                                    }
+                                },
+                                positionLabel = formatTime(position),
+                                durationLabel = formatTime(duration),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
+
+                if (sheetProgress < 0.98f) {
+                    artworkAndControlsContent()
+                } else {
+                    AnimatedContent(
+                        targetState = showLyrics,
+                        transitionSpec = { fadeIn() togetherWith fadeOut() },
+                        label = "artworkLyricsTransition",
+                        modifier = Modifier.fillMaxSize(),
+                    ) { showingLyrics ->
+                        if (showingLyrics) {
+                            LyricsPanel(
+                                lyrics = currentLyrics,
+                                positionMs = position,
+                                onLineClick = { timeMs -> controller.seekTo(timeMs) },
+                                onScrollActivity = onLyricsScroll,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        } else {
+                            artworkAndControlsContent()
+                        }
                     }
                 }
             }
 
-            AnimatedVisibility(
-                visible = chromeVisible || !showLyrics,
-                enter = fadeIn(tween(400, easing = FastOutSlowInEasing)) +
-                    expandVertically(
-                        expandFrom = Alignment.Bottom,
-                        animationSpec = tween(400, easing = FastOutSlowInEasing),
-                    ),
-                exit = fadeOut(tween(300, easing = FastOutSlowInEasing)) +
-                    shrinkVertically(
-                        shrinkTowards = Alignment.Bottom,
-                        animationSpec = tween(300, easing = FastOutSlowInEasing),
-                    ),
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer {
+                        val p = sheetProgress.coerceIn(0f, 1f)
+                        val miniR = miniArtRectProvider()
+                        val fullR = scaleRectAroundCenter(fullArtSlotRectProvider(), playPauseScale)
+                        val curR = lerpRect(miniR, fullR, p)
+                        translationY = curR.bottom - fullR.bottom
+                        alpha = ((p - 0.25f) / 0.65f).coerceIn(0f, 1f)
+                    },
             ) {
-                Column(Modifier.fillMaxWidth()) {
-                    Spacer(Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Surface(
-                            color = InkSoft,
-                            shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, Gold.copy(alpha = 0.5f)),
-                            modifier = Modifier.clickable { showLyrics = !showLyrics },
+                AnimatedVisibility(
+                    visible = chromeVisible || !showLyrics,
+                    enter = fadeIn(tween(400, easing = FastOutSlowInEasing)) +
+                        expandVertically(
+                            expandFrom = Alignment.Bottom,
+                            animationSpec = tween(400, easing = FastOutSlowInEasing),
+                        ),
+                    exit = fadeOut(tween(300, easing = FastOutSlowInEasing)) +
+                        shrinkVertically(
+                            shrinkTowards = Alignment.Bottom,
+                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                        ),
+                ) {
+                    Column(Modifier.fillMaxWidth()) {
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
+                            Surface(
+                                color = InkSoft,
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, Gold.copy(alpha = 0.5f)),
+                                modifier = Modifier.clickable(enabled = interactiveEnabled) { showLyrics = !showLyrics },
                             ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.MusicNote,
-                                    contentDescription = null,
-                                    tint = Gold,
-                                    modifier = Modifier.size(16.dp),
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    if (showLyrics) "Ocultar letras" else if (currentLyrics != null) "Ver letras" else "Sin letras",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = Gold,
-                                    fontWeight = FontWeight.Bold,
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.MusicNote,
+                                        contentDescription = null,
+                                        tint = Gold,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        if (showLyrics) "Ocultar letras" else if (currentLyrics != null) "Ver letras" else "Sin letras",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = Gold,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                }
                             }
-                        }
 
-                        Surface(
-                            color = InkSoft,
-                            shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, Gold.copy(alpha = 0.5f)),
-                            modifier = Modifier.clickable(onClick = onOpenQueue),
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
+                            Surface(
+                                color = InkSoft,
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, Gold.copy(alpha = 0.5f)),
+                                modifier = Modifier.clickable(enabled = interactiveEnabled, onClick = onOpenQueue),
                             ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
-                                    contentDescription = null,
-                                    tint = Gold,
-                                    modifier = Modifier.size(16.dp),
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    "Cola (${controller.mediaItemCount})",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = Gold,
-                                    fontWeight = FontWeight.Bold,
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
+                                        contentDescription = null,
+                                        tint = Gold,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        "Cola (${controller.mediaItemCount})",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = Gold,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                }
                             }
                         }
                     }
@@ -2091,7 +2649,6 @@ private fun NowPlayingSheet(
 
             Spacer(Modifier.height(16.dp))
         }
-
     }
 }
 
