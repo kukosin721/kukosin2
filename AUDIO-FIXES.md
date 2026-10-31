@@ -108,3 +108,28 @@ pedían 226 px para una carátula de 340 dp.
 **Nota:** la carátula embebida se cachea en memoria, no en disco (Coil solo cachea en disco los
 fetchers de red). Si con una biblioteca de miles de temas notás tirones al scrollear las
 cuadrículas, el siguiente paso es agregar un `DiskCache` propio para esas imágenes.
+
+## 5. Color de acento configurable — `AccentTheme.kt` (nuevo)
+
+En **Configuración → Personalización** ahora se puede cambiar el dorado por otro tono.
+
+- **10 presets** (`AccentPreset`): Oro, Ámbar, Cobre, Rosa, Magenta, Violeta, Azul, Cian,
+  Esmeralda, Lima. Todos usan la **misma saturación (0.73) y luminosidad (0.67)** que el
+  `#E8B86D` original: solo cambia el tono, así que el contraste con el fondo `Ink` y el texto
+  `Cream` es idéntico en los diez. No hay ningún preset "que no se lee".
+- **Slider de tono fino** (0–360°) para cualquier valor intermedio. Arrastrar solo actualiza
+  el estado en memoria; al soltar (`onValueChangeFinished`) se escribe en disco una sola vez.
+- **"Volver al oro"** restaura los 37° de fábrica.
+
+Cómo funciona por dentro:
+
+- `Color.kt`: `Gold` y `GoldDim` dejaron de ser `val` fijos y pasaron a ser **getters** que
+  leen `AccentTheme.color` / `colorDim`. Los **168 usos** de `Gold` en la UI quedaron igual,
+  sin tocar ninguna pantalla: se repintan solos porque leen un `mutableFloatStateOf`.
+- `Theme.kt`: el `HiFiScheme` era un `val` de nivel superior (se congelaba en dorado). Ahora
+  se arma dentro de `AppTheme` y se memoriza con `remember(accent, accentDim)`, así que
+  `MaterialTheme.colorScheme.primary` (chips, sliders, ripples) también sigue al acento.
+- `KukosinApp.onCreate()` llama a `AccentTheme.init(this)` **antes** de la primera pantalla.
+- Persistencia: `SharedPreferences("kukosin_appearance")`, clave `accent_hue`, default `37f`.
+
+Verificado compilando: **387 clases, 0 errores** (antes 377).

@@ -84,6 +84,7 @@ import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Refresh
@@ -177,7 +178,11 @@ import com.kukosin.app.playback.QueueManager
 import com.kukosin.app.playback.UsbDacManager
 import com.kukosin.app.ui.theme.Cream
 import com.kukosin.app.ui.theme.CreamMuted
+import com.kukosin.app.ui.theme.AccentPreset
+import com.kukosin.app.ui.theme.AccentTheme
 import com.kukosin.app.ui.theme.Gold
+import com.kukosin.app.ui.theme.Line
+import com.kukosin.app.ui.theme.accentColor
 import com.kukosin.app.ui.theme.Ink
 import com.kukosin.app.ui.theme.InkElevated
 import com.kukosin.app.ui.theme.InkSoft
@@ -493,6 +498,11 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
             onToggleBitPerfect = viewModel::toggleBitPerfect,
             oboDirectOutput = audioConfig.useOboeDirectOutput,
             onToggleOboeDirectOutput = viewModel::toggleOboeDirectOutput,
+            accentHue = AccentTheme.hue,
+            onPreviewAccent = { AccentTheme.preview(it) },
+            onSelectAccent = { AccentTheme.select(it) },
+            onCommitAccent = { AccentTheme.commit() },
+            onResetAccent = { AccentTheme.reset() },
             onRescan = {
                 if (hasPermission) viewModel.refresh() else permissionLauncher.launch(audioPermissions())
             },
@@ -2735,6 +2745,11 @@ private fun FullScreenSettingsScreen(
     onToggleBitPerfect: () -> Unit,
     oboDirectOutput: Boolean,
     onToggleOboeDirectOutput: () -> Unit,
+    accentHue: Float,
+    onPreviewAccent: (Float) -> Unit,
+    onSelectAccent: (AccentPreset) -> Unit,
+    onCommitAccent: () -> Unit,
+    onResetAccent: () -> Unit,
     onRescan: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -3067,6 +3082,109 @@ private fun FullScreenSettingsScreen(
                                     Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(8.dp))
                                     Text("Rescanear Biblioteca Completa", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        Text("Personalización", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(6.dp))
+                        Surface(
+                            color = InkSoft,
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text("Color de Acento", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "El dorado de fábrica se puede cambiar por otro tono. Se aplica a toda la app y queda guardado.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = CreamMuted,
+                                )
+                                Spacer(Modifier.height(14.dp))
+                                LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    items(AccentPreset.entries.toList()) { preset ->
+                                        val selected = AccentTheme.isSelected(preset)
+                                        Column(
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .clickable { onSelectAccent(preset) }
+                                                .padding(vertical = 4.dp, horizontal = 2.dp),
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(36.dp)
+                                                    .clip(CircleShape)
+                                                    .background(accentColor(preset.hueDegrees))
+                                                    .then(
+                                                        if (selected) {
+                                                            Modifier.border(2.dp, Cream, CircleShape)
+                                                        } else {
+                                                            Modifier
+                                                        },
+                                                    ),
+                                                contentAlignment = Alignment.Center,
+                                            ) {
+                                                if (selected) {
+                                                    Icon(
+                                                        Icons.Rounded.Check,
+                                                        contentDescription = null,
+                                                        tint = Ink,
+                                                        modifier = Modifier.size(18.dp),
+                                                    )
+                                                }
+                                            }
+                                            Spacer(Modifier.height(4.dp))
+                                            Text(
+                                                preset.label,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (selected) Cream else CreamMuted,
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(Modifier.height(14.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Text("Tono fino", style = MaterialTheme.typography.labelMedium, color = CreamMuted)
+                                    Text(
+                                        "${accentHue.toInt()}°",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = Gold,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                }
+                                Slider(
+                                    value = accentHue,
+                                    onValueChange = onPreviewAccent,
+                                    onValueChangeFinished = onCommitAccent,
+                                    valueRange = 0f..360f,
+                                    colors = SliderDefaults.colors(
+                                        thumbColor = Gold,
+                                        activeTrackColor = Gold,
+                                        inactiveTrackColor = Line,
+                                    ),
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End,
+                                ) {
+                                    Text(
+                                        "Volver al oro",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = Gold,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable { onResetAccent() }
+                                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                                    )
                                 }
                             }
                         }

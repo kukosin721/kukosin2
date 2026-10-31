@@ -141,6 +141,20 @@ confirmarlo):
 - **Cambiar un ajuste de audio** (sample rate, bit-perfect) mientras suena YTM: el player
   se recrea y debe retomar la misma canción.
 
+### H. Personalización: color de acento
+
+1. Ve a **Configuración** (engranaje) → baja hasta **Personalización**.
+2. Toca los círculos de color. **Todo** debe cambiar de inmediato: títulos de sección, botón
+   de play, barra de progreso, badges, el chip seleccionado y el thumb del slider. No debe
+   quedar ningún dorado suelto.
+3. Arrastra el slider **Tono fino** y mira el círculo del preset: el check se mueve al preset
+   más cercano y el número de grados se actualiza en vivo.
+4. **Cierra la app por completo** (recientes → deslizar) y vuelve a abrirla: el tono debe
+   seguir ahí. Esto es lo que prueba que se guardó en disco y no solo en memoria.
+5. Toca **Volver al oro** → vuelve a los 37° y el preset **Oro** queda marcado.
+6. **Contraste**: elige Azul y Violeta y confirma que los textos se leen igual de bien que en
+   dorado (todos los presets comparten saturación/luminosidad, así que deberían).
+
 ---
 
 ## 4. Si algo falla

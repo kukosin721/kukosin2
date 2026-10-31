@@ -6,6 +6,7 @@ import coil.ImageLoaderFactory
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import com.kukosin.app.data.artwork.EmbeddedArtwork
+import com.kukosin.app.ui.theme.AccentTheme
 
 /**
  * Cargador de imágenes propio.
@@ -15,6 +16,12 @@ import com.kukosin.app.data.artwork.EmbeddedArtwork
  * (miniaturas de YouTube Music, etc.) sigue usando los fetchers por defecto de Coil.
  */
 class KukosinApp : Application(), ImageLoaderFactory {
+
+    override fun onCreate() {
+        super.onCreate()
+        // Color de acento guardado por el usuario, antes de que se dibuje cualquier pantalla.
+        AccentTheme.init(this)
+    }
 
     override fun newImageLoader(): ImageLoader = ImageLoader.Builder(this)
         .components { add(EmbeddedArtwork.FetcherFactory(this@KukosinApp)) }
