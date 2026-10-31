@@ -43,60 +43,56 @@ object MusicLibrary {
     }
 
     fun buildFolderTree(tracks: List<Track>): FolderNode {
+        // Construimos también los directorios intermedios sin archivos de audio. De otra
+        // manera un disco en Música/Artista/Álbum desaparecía si Artista estaba vacío.
+        class MutableFolder(val name: String, val path: String) {
+            val children = linkedMapOf<String, MutableFolder>()
+            val tracks = mutableListOf<Track>()
+        }
+
         val rootPath = "/storage/emulated/0"
-        val rootNode = FolderNode(name = "Almacenamiento interno", path = rootPath)
-        val folderMap = mutableMapOf<String, MutableList<Track>>()
-
+        val root = MutableFolder("Almacenamiento interno", rootPath)
         tracks.forEach { track ->
-            val file = if (track.filePath.isNotBlank()) File(track.filePath) else null
-            val folderPath = file?.parent ?: "Desconocido"
-            folderMap.getOrPut(folderPath) { mutableListOf() }.add(track)
-        }
-
-        fun buildNode(currentPath: String): FolderNode {
-            val name = File(currentPath).name.ifBlank { currentPath }
-            val directTracks = folderMap[currentPath] ?: emptyList()
-            
-            val childPaths = folderMap.keys
-                .filter { path ->
-                    path != currentPath && path.startsWith(currentPath) &&
-                        File(path).parent == currentPath
+            val path = track.filePath.takeIf { it.isNotBlank() }?.let { File(it).parent }
+            if (path.isNullOrBlank()) {
+                val unknown = root.children.getOrPut("<sin-ruta>") {
+                    MutableFolder("Ubicación desconocida", "<sin-ruta>")
                 }
-                .sorted()
+                unknown.tracks.add(track)
+                return@forEach
+            }
 
-            val childNodes = childPaths.map { buildNode(it) }
-            return FolderNode(
-                name = name,
-                path = currentPath,
-                subfolders = childNodes,
-                tracks = directTracks.sortedBy { it.trackNumber.takeIf { t -> t > 0 } ?: Int.MAX_VALUE },
-            )
+            val internal = path == rootPath || path.startsWith("$rootPath/")
+            var folder = if (internal) root else root.children.getOrPut("<otros>") {
+                MutableFolder("Otras ubicaciones", "<otros>")
+            }
+            val parts = (if (internal) path.removePrefix(rootPath) else path)
+                .split('/').filter { it.isNotBlank() }
+            var currentPath = if (internal) rootPath else ""
+            parts.forEach { part ->
+                currentPath += "/$part"
+                val nodePath = currentPath
+                folder = folder.children.getOrPut(nodePath) { MutableFolder(part, nodePath) }
+            }
+            folder.tracks.add(track)
         }
 
-        val topLevelPaths = folderMap.keys
-            .filter { path ->
-                path.startsWith(rootPath) && folderMap.keys.none { parent -> parent != path && path.startsWith("$parent/") }
-            }
-            .sorted()
-
-        val rootChildren = if (topLevelPaths.isNotEmpty()) {
-            topLevelPaths.map { buildNode(it) }
-        } else {
-            folderMap.map { (path, tList) ->
-                FolderNode(
-                    name = File(path).name.ifBlank { "Música" },
-                    path = path,
-                    tracks = tList.sortedBy { it.title.lowercase() },
-                )
-            }
-        }
-
-        return rootNode.copy(subfolders = rootChildren)
+        fun freeze(folder: MutableFolder): FolderNode = FolderNode(
+            name = folder.name,
+            path = folder.path,
+            subfolders = folder.children.values.map { freeze(it) }.sortedBy { it.name.lowercase() },
+            tracks = folder.tracks.sortedWith(
+                compareBy<Track> { it.trackNumber.takeIf { number -> number > 0 } ?: Int.MAX_VALUE }
+                    .thenBy { it.title.lowercase() },
+            ),
+        )
+        return freeze(root)
     }
 
     fun groupAlbums(tracks: List<Track>): List<AlbumGroup> {
-        return tracks.groupBy { it.album.ifBlank { "Álbum desconocido" } }
-            .map { (albumName, albumTracks) ->
+        return tracks.groupBy { it.album.ifBlank { "Álbum desconocido" } to it.effectiveAlbumArtist }
+            .map { (albumKey, albumTracks) ->
+                val albumName = albumKey.first
                 val first = albumTracks.first()
                 val sortedTracks = albumTracks.sortedWith(
                     compareBy<Track> { it.discNumber.takeIf { d -> d > 0 } ?: 1 }
@@ -125,6 +121,72 @@ object MusicLibrary {
                 )
             }
             .sortedBy { it.name.lowercase() }
+    }
+
+    fun groupAlbumArtists(tracks: List<Track>): List<ArtistGroup> {
+        return tracks.groupBy { it.effectiveAlbumArtist }
+            .map { (artistName, artistTracks) ->
+                val albums = groupAlbums(artistTracks)
+                ArtistGroup(
+                    name = artistName,
+                    albums = albums,
+                    tracks = artistTracks.sortedBy { it.title.lowercase() },
+                )
+            }
+            .sortedWith(
+                compareBy<ArtistGroup> { it.name == "Artista desconocido" }
+                    .thenBy { it.name.lowercase() },
+            )
+    }
+
+    fun groupGenres(tracks: List<Track>): List<TagCategoryGroup> {
+        return tracks.groupBy { it.genre.trim().ifBlank { "Sin género" } }
+            .map { (genreName, genreTracks) ->
+                val sorted = genreTracks.sortedBy { it.title.lowercase() }
+                val totalMin = (sorted.sumOf { it.durationMs } / 60_000L).coerceAtLeast(1L)
+                TagCategoryGroup(
+                    name = genreName,
+                    subtitle = "${sorted.size} canciones · $totalMin min",
+                    tracks = sorted,
+                )
+            }
+            .sortedWith(
+                compareBy<TagCategoryGroup> { it.name == "Sin género" }
+                    .thenBy { it.name.lowercase() },
+            )
+    }
+
+    fun groupYears(tracks: List<Track>): List<TagCategoryGroup> {
+        return tracks.groupBy { if (it.year > 0) it.year.toString() else "Año desconocido" }
+            .map { (yearLabel, yearTracks) ->
+                val sorted = yearTracks.sortedBy { it.title.lowercase() }
+                val albumCount = sorted.map { it.album.lowercase() }.distinct().size
+                TagCategoryGroup(
+                    name = yearLabel,
+                    subtitle = "$albumCount álbumes · ${sorted.size} canciones",
+                    tracks = sorted,
+                )
+            }
+            .sortedWith(
+                compareBy<TagCategoryGroup> { it.name == "Año desconocido" }
+                    .thenByDescending { it.name.toIntOrNull() ?: 0 },
+            )
+    }
+
+    fun groupComposers(tracks: List<Track>): List<TagCategoryGroup> {
+        return tracks.groupBy { it.composer.trim().ifBlank { "Compositor desconocido" } }
+            .map { (composerName, composerTracks) ->
+                val sorted = composerTracks.sortedBy { it.title.lowercase() }
+                TagCategoryGroup(
+                    name = composerName,
+                    subtitle = "${sorted.size} canciones",
+                    tracks = sorted,
+                )
+            }
+            .sortedWith(
+                compareBy<TagCategoryGroup> { it.name == "Compositor desconocido" }
+                    .thenBy { it.name.lowercase() },
+            )
     }
 
     private fun queryAudio(context: Context): List<Track> {

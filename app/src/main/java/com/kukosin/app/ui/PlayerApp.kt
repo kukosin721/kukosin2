@@ -38,16 +38,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.animate
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.NavigateNext
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.Info
@@ -58,10 +58,8 @@ import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
@@ -71,16 +69,12 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.rememberSwipeToDismissBoxState
@@ -90,38 +84,25 @@ import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
-import androidx.compose.material.icons.rounded.Repeat
-import androidx.compose.material.icons.rounded.RepeatOne
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.SkipNext
-import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.Usb
-import androidx.compose.material.icons.automirrored.rounded.VolumeDown
-import androidx.compose.material.icons.automirrored.rounded.VolumeOff
-import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import com.kukosin.app.ui.component.KukosinWaveformSlider
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRowDefaults
-import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -158,6 +139,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -169,6 +153,7 @@ import coil.compose.AsyncImage
 import com.kukosin.app.data.AlbumGroup
 import com.kukosin.app.data.ArtistGroup
 import com.kukosin.app.data.FolderNode
+import com.kukosin.app.data.LibraryInsights
 import com.kukosin.app.data.Track
 import com.kukosin.app.data.formatTime
 import com.kukosin.app.data.ytm.YtmTrack
@@ -188,6 +173,8 @@ import com.kukosin.app.ui.theme.Ink
 import com.kukosin.app.ui.theme.InkElevated
 import com.kukosin.app.ui.theme.InkSoft
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.runtime.rememberUpdatedState
@@ -211,7 +198,9 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
     val library by viewModel.uiState.collectAsStateWithLifecycle()
     var hasPermission by remember { mutableStateOf(hasAudioPermission(context)) }
     var controller by remember { mutableStateOf<MediaController?>(null) }
-    var showNowPlaying by remember { mutableStateOf(false) }
+    // Estilo Poweramp: el reproductor siempre es la pantalla principal al iniciar.
+    var showNowPlaying by remember { mutableStateOf(true) }
+    var activeSection by remember { mutableStateOf(AppSection.LIBRARY) }
     var showSignalPath by remember { mutableStateOf(false) }
     var showQueueSheet by remember { mutableStateOf(false) }
     var userMessage by remember { mutableStateOf<String?>(null) }
@@ -273,16 +262,20 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
 
     val density = LocalDensity.current
     val playerSheetScope = rememberCoroutineScope()
-    // Única fuente de verdad para la transición MiniPlayer ↔ Reproductor (0f = cerrado, 1f = abierto).
-    var sheetProgress by remember { mutableFloatStateOf(0f) }
+    // Estilo Poweramp: el reproductor siempre es la pantalla principal (1f = reproductor, 0f = sección activa).
+    var sheetProgress by remember { mutableFloatStateOf(1f) }
+    var playerLyricsProgress by remember { mutableFloatStateOf(0f) }
     var isSheetDragging by remember { mutableStateOf(false) }
     var wasSheetDragged by remember { mutableStateOf(false) }
     var sheetAnimJob by remember { mutableStateOf<Job?>(null) }
+    var lyricsAnimJob by remember { mutableStateOf<Job?>(null) }
+    val favoriteUris by LibraryInsights.favorites.collectAsStateWithLifecycle()
 
     var rootCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
     var rootSizePx by remember { mutableStateOf(IntSize.Zero) }
     var miniArtRestingRect by remember { mutableStateOf(Rect.Zero) }
     var fullArtSlotRect by remember { mutableStateOf(Rect.Zero) }
+    var lyricsArtSlotRect by remember { mutableStateOf(Rect.Zero) }
 
     val playPauseScale by animateFloatAsState(
         targetValue = if (playback.isPlaying) 1f else 0.92f,
@@ -321,30 +314,43 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
         }
     }
 
-    LaunchedEffect(playback.current == null) {
-        if (playback.current == null) {
-            sheetAnimJob?.cancel()
-            showNowPlaying = false
-            isSheetDragging = false
-            wasSheetDragged = false
-            sheetProgress = 0f
+    fun animateLyrics(target: Float, initialVelocity: Float = 0f) {
+        lyricsAnimJob?.cancel()
+        lyricsAnimJob = playerSheetScope.launch {
+            animate(
+                initialValue = playerLyricsProgress,
+                targetValue = target,
+                initialVelocity = initialVelocity.coerceIn(-8f, 8f),
+                animationSpec = spring(dampingRatio = 0.88f, stiffness = 320f),
+            ) { value, _ -> playerLyricsProgress = value.coerceIn(0f, 1f) }
+            playerLyricsProgress = target
+        }
+    }
+
+    // Al escanear la biblioteca, prepara el primer tema en pausa si la cola estaba vacía,
+    // de modo que el reproductor principal tenga carátula y onda listas al instante.
+    LaunchedEffect(controller, library.tracks.size) {
+        val player = controller
+        if (player != null && library.tracks.isNotEmpty() && player.mediaItemCount == 0) {
+            QueueManager.cueTracksIfEmpty(player, library.tracks)
         }
     }
 
     val dragRangePx = (rootSizePx.height * 0.68f).takeIf { it > 240f }
         ?: with(density) { 520.dp.toPx() }
     val currentDragRangePx by rememberUpdatedState(dragRangePx)
+    val lyricsDragRangePx = with(density) { 240.dp.toPx() }
 
     val maxArtDp = if (rootSizePx.height > 0 && rootSizePx.width > 0) {
         with(density) {
             minOf(
-                340.dp.toPx(),
+                320.dp.toPx(),
                 rootSizePx.width - 48.dp.toPx(),
-                (rootSizePx.height - 470.dp.toPx()).coerceAtLeast(210.dp.toPx()),
+                (rootSizePx.height - 496.dp.toPx()).coerceAtLeast(120.dp.toPx()),
             ).toDp()
         }
     } else {
-        320.dp
+        304.dp
     }
 
     val resolveMiniArtRect: () -> Rect = {
@@ -359,7 +365,7 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
     }
 
     val resolveFullArtSlotRect: () -> Rect = {
-        if (fullArtSlotRect != Rect.Zero) {
+        val baseFull = if (fullArtSlotRect != Rect.Zero) {
             fullArtSlotRect
         } else {
             val artPx = with(density) { maxArtDp.toPx() }
@@ -369,31 +375,46 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
             val top = h * 0.12f
             Rect(left, top, left + artPx, top + artPx)
         }
+        val scaledFull = scaleRectAroundCenter(baseFull, playPauseScale)
+        val lp = playerLyricsProgress.coerceIn(0f, 1f)
+        if (lp > 0.001f && lyricsArtSlotRect != Rect.Zero) {
+            lerpRect(scaledFull, lyricsArtSlotRect, lp)
+        } else {
+            scaledFull
+        }
     }
 
-    BackHandler(
-        enabled = (showNowPlaying || sheetProgress > 0.05f) &&
-            !showQueueSheet && !showSignalPath && !showSettings,
-    ) {
-        animatePlayerSheet(target = 0f, fromDrag = false)
+    // Como el reproductor es la pantalla principal, Atrás en Biblioteca/Ecualizador/Búsqueda
+    // retrocede en subcategorías o vuelve con animación al reproductor principal.
+    val modalOpen = showQueueSheet || showSignalPath || showSettings ||
+        library.selectedAlbum != null || library.selectedArtist != null ||
+        library.selectedTagGroup != null || library.inspectTrack != null
+    BackHandler(enabled = !modalOpen && (!showNowPlaying || sheetProgress < 0.999f)) {
+        if (sheetProgress > 0.01f) {
+            animatePlayerSheet(target = 1f, fromDrag = false)
+        } else if (activeSection == AppSection.LIBRARY) {
+            when {
+                library.activeCategory == LibraryCategory.CARPETAS && viewModel.navigateUpFolder() -> Unit
+                library.activeCategory != null -> viewModel.selectCategory(null)
+                else -> animatePlayerSheet(target = 1f, fromDrag = false)
+            }
+        } else {
+            animatePlayerSheet(target = 1f, fromDrag = false)
+        }
     }
 
-    LaunchedEffect(playback.current?.uri) {
-        // Los streams de YouTube Music no tienen archivo ni PCM local: pedir metadatos/análisis
-        // solo gastaba trabajo y podía dejar la pantalla "analizando" para siempre.
-        val currentTrack = playback.current
-        if (currentTrack != null && currentTrack.isLocal) {
+    val sheetController = controller
+    val sheetTrack = playback.current ?: library.tracks.firstOrNull()
+
+    LaunchedEffect(sheetTrack?.uri, library.inspectTrack?.uri, audioConfig.autoAnalyze) {
+        val currentTrack = sheetTrack
+        if (library.inspectTrack == null && currentTrack != null && currentTrack.isLocal) {
             viewModel.prepareMetadata(currentTrack)
             if (audioConfig.autoAnalyze) {
                 viewModel.analyzeSpectral(currentTrack)
             }
         }
     }
-
-    // `controller` es un var delegado: no admite smart cast, así que se captura en locales
-    // en vez de forzar con `!!` (que rompería si algo cambia entre el chequeo y el uso).
-    val sheetController = controller
-    val sheetTrack = playback.current
 
     Box(
         modifier = Modifier
@@ -408,177 +429,135 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
                 ),
             ),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding(),
-        ) {
-            Header(
-                trackCount = library.tracks.size,
-                scanning = library.isScanning,
-                outputName = output.name,
-                outputKind = output.typeLabel,
-                isDac = output.isDac,
-                isBitPerfect = output.isBitPerfectSupported,
-                hasUsbPerm = output.hasUsbPermission,
-                error = library.error,
-                onRequestUsb = { UsbDacManager.requestPermission(context) },
+        val bottomPadding = 108
+
+        when (activeSection) {
+            AppSection.LIBRARY -> PowerampLibraryWorkspace(
+                library = library,
+                hasPermission = hasPermission,
+                output = output,
+                currentUri = playback.current?.uri,
+                isPlaying = playback.isPlaying,
+                controller = controller,
+                bottomPadding = bottomPadding,
+                onBackToPlayer = { animatePlayerSheet(target = 1f, fromDrag = false) },
+                onSelectCategory = viewModel::selectCategory,
+                onQueryChange = viewModel::onQueryChange,
+                onRequestPermission = { permissionLauncher.launch(audioPermissions()) },
+                onRescan = {
+                    if (hasPermission) viewModel.refresh() else permissionLauncher.launch(audioPermissions())
+                },
                 onOpenSignalPath = { showSignalPath = true },
-                onOpenSettings = { showSettings = true },
+                onOpenQueueSheet = { showQueueSheet = true },
+                onTrackClick = { tracks, index -> playTrackList(controller, tracks, index) },
+                onAlbumClick = viewModel::selectAlbum,
+                onArtistClick = viewModel::selectArtist,
+                onTagGroupClick = viewModel::selectTagGroup,
+                onFolderClick = viewModel::navigateToFolder,
+                onNavigateUpFolder = { viewModel.navigateUpFolder() },
+                onInspectTrack = viewModel::setInspectTrack,
+                onMessage = { msg -> userMessage = msg },
             )
 
-            LibraryTabs(
-                activeTab = library.activeTab,
-                onTabSelected = viewModel::setTab,
+            AppSection.EQUALIZER -> PowerampEqualizerWorkspace(
+                bottomPadding = bottomPadding,
+                onBackToPlayer = { animatePlayerSheet(target = 1f, fromDrag = false) },
             )
 
-            if (library.activeTab != LibraryTab.YOUTUBE_MUSIC && hasPermission) {
-                SearchField(
-                    query = library.query,
-                    onQueryChange = viewModel::onQueryChange,
-                )
-            }
+            AppSection.SEARCH -> PowerampSearchWorkspace(
+                library = library,
+                hasPermission = hasPermission,
+                currentUri = playback.current?.uri,
+                playingYtmId = playingYtmId,
+                isPlaying = playback.isPlaying,
+                playbackError = playback.error,
+                controller = controller,
+                bottomPadding = bottomPadding,
+                onBackToPlayer = { animatePlayerSheet(target = 1f, fromDrag = false) },
+                onQueryChange = viewModel::onQueryChange,
+                onYtmQueryChange = viewModel::onYtmQueryChange,
+                onSearchYtm = { viewModel.searchYtm() },
+                onRequestPermission = { permissionLauncher.launch(audioPermissions()) },
+                onLocalTrackClick = { tracks, index -> playTrackList(controller, tracks, index) },
+                onAlbumClick = viewModel::selectAlbum,
+                onArtistClick = viewModel::selectArtist,
+                onInspectTrack = viewModel::setInspectTrack,
+                onYtmTrackClick = { ytmTrack ->
+                    controller?.let { player ->
+                        val queue = library.ytmTracks.map(YtmService::toMediaItem)
+                        val startIndex = library.ytmTracks
+                            .indexOfFirst { it.id == ytmTrack.id }
+                            .coerceAtLeast(0)
+                        QueueManager.playItems(player, queue, startIndex)
+                    }
+                },
+                onMessage = { msg -> userMessage = msg },
+            )
+        }
 
-            val bottomPadding = if (playback.current != null) 108 else 24
-
-            when (library.activeTab) {
-                LibraryTab.YOUTUBE_MUSIC -> YtmView(
-                    ytmTracks = library.ytmTracks,
-                    ytmQuery = library.ytmQuery,
-                    isSearching = library.isYtmSearching,
-                    onQueryChange = viewModel::onYtmQueryChange,
-                    onSearch = { viewModel.searchYtm() },
-                    errorMessage = library.ytmError ?: playback.error,
-                    playingVideoId = playingYtmId,
-                    isPlaying = playback.isPlaying,
-                    onTrackClick = { ytmTrack ->
-                        controller?.let { player ->
-                            // Cola real: se encola TODA la búsqueda y se arranca en la tocada,
-                            // así "siguiente" y el autoplay siguen con el resto de resultados.
-                            val queue = library.ytmTracks.map(YtmService::toMediaItem)
-                            val startIndex = library.ytmTracks
-                                .indexOfFirst { it.id == ytmTrack.id }
-                                .coerceAtLeast(0)
-                            QueueManager.playItems(player, queue, startIndex)
-                        }
-                    },
-                    modifier = Modifier.weight(1f),
-                    bottomPadding = bottomPadding,
-                )
-                else -> {
-                    when {
-                        !hasPermission -> PermissionCard(
-                            onGrant = { permissionLauncher.launch(audioPermissions()) },
-                        )
-                        library.isScanning && library.tracks.isEmpty() -> LoadingLibrary()
-                        library.hasScanned && library.tracks.isEmpty() -> EmptyLibrary(hasQuery = false)
-                        else -> {
-                            when (library.activeTab) {
-                                LibraryTab.CANCIONES -> TrackList(
-                                    tracks = library.filteredTracks,
-                                    currentUri = playback.current?.uri,
-                                    isPlaying = playback.isPlaying,
-                                    controller = controller,
-                                    onTrackClick = { index ->
-                                        playTrackList(controller, library.filteredTracks, index)
-                                    },
-                                    onInspectClick = viewModel::setInspectTrack,
-                                    onMessage = { msg -> userMessage = msg },
-                                    modifier = Modifier.weight(1f),
-                                    bottomPadding = bottomPadding,
-                                )
-                                LibraryTab.ALBUMES -> AlbumView(
-                                    albums = library.filteredAlbums,
-                                    onAlbumClick = viewModel::selectAlbum,
-                                    modifier = Modifier.weight(1f),
-                                    bottomPadding = bottomPadding,
-                                )
-                                LibraryTab.ARTISTAS -> ArtistView(
-                                    artists = library.filteredArtists,
-                                    onArtistClick = viewModel::selectArtist,
-                                    modifier = Modifier.weight(1f),
-                                    bottomPadding = bottomPadding,
-                                )
-                                LibraryTab.CARPETAS -> FolderBrowserView(
-                                    currentFolder = library.currentFolder,
-                                    folderPath = library.folderPath,
-                                    currentUri = playback.current?.uri,
-                                    isPlaying = playback.isPlaying,
-                                    onFolderClick = viewModel::navigateToFolder,
-                                    onNavigateUp = { viewModel.navigateUpFolder() },
-                                    onTrackClick = { tracks, index ->
-                                        playTrackList(controller, tracks, index)
-                                    },
-                                    onInspectClick = viewModel::setInspectTrack,
-                                    modifier = Modifier.weight(1f),
-                                    bottomPadding = bottomPadding,
-                                )
-                                else -> {}
-                            }
-                        }
+        MiniPlayer(
+            track = sheetTrack,
+            isPlaying = playback.isPlaying,
+            progress = playback.progress,
+            isDac = output.isDac,
+            sheetProgress = sheetProgress,
+            onToggle = {
+                val player = controller
+                if (player != null) {
+                    if (player.mediaItemCount == 0 && library.tracks.isNotEmpty()) {
+                        playTrackList(player, library.tracks, 0)
+                    } else if (player.isPlaying) {
+                        player.pause()
+                    } else {
+                        player.play()
                     }
                 }
-            }
-        }
-
-        playback.current?.let { current ->
-            if (sheetProgress < 0.999f) {
-                MiniPlayer(
-                    track = current,
-                    isPlaying = playback.isPlaying,
-                    progress = playback.progress,
-                    isDac = output.isDac,
-                    sheetProgress = sheetProgress,
-                    onToggle = { controller?.let { if (it.isPlaying) it.pause() else it.play() } },
-                    onNext = { controller?.seekToNext() },
-                    onOpen = { animatePlayerSheet(target = 1f, fromDrag = false) },
-                    onOpenSignalPath = { showSignalPath = true },
-                    onArtMeasured = { artCoords ->
-                        if (sheetProgress <= 0.001f) {
-                            val root = rootCoords
-                            if (root != null && root.isAttached && artCoords.isAttached) {
-                                miniArtRestingRect = root.localBoundingBoxOf(artCoords, clipBounds = false)
-                            }
-                        }
-                    },
-                    onVerticalDragStart = {
-                        sheetAnimJob?.cancel()
-                        isSheetDragging = true
-                        wasSheetDragged = true
-                    },
-                    onVerticalDragDelta = { dragAmountPx ->
-                        val range = currentDragRangePx
-                        val next = (sheetProgress - dragAmountPx / range).coerceIn(0f, 1f)
-                        sheetProgress = next
-                        if (next > 0.01f) showNowPlaying = true
-                    },
-                    onVerticalDragEnd = { velocityYPxPerSec ->
-                        val range = currentDragRangePx
-                        val progressVel = -velocityYPxPerSec / range
-                        val shouldOpen = velocityYPxPerSec < -520f ||
-                            (sheetProgress > 0.24f && velocityYPxPerSec < 420f)
-                        animatePlayerSheet(
-                            target = if (shouldOpen) 1f else 0f,
-                            initialVelocity = progressVel,
-                            fromDrag = true,
-                        )
-                    },
-                    onVerticalDragCancel = {
-                        animatePlayerSheet(
-                            target = if (sheetProgress > 0.5f) 1f else 0f,
-                            fromDrag = true,
-                        )
-                    },
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .navigationBarsPadding()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
+            },
+            onNext = { controller?.seekToNext() },
+            onOpen = { animatePlayerSheet(target = 1f, fromDrag = false) },
+            onOpenSignalPath = { showSignalPath = true },
+            onArtMeasured = { artCoords ->
+                val root = rootCoords
+                if (root != null && root.isAttached && artCoords.isAttached) {
+                    miniArtRestingRect = root.localBoundingBoxOf(artCoords, clipBounds = false)
+                }
+            },
+            onVerticalDragStart = {
+                sheetAnimJob?.cancel()
+                isSheetDragging = true
+                wasSheetDragged = true
+            },
+            onVerticalDragDelta = { dragAmountPx ->
+                val range = currentDragRangePx
+                val next = (sheetProgress - dragAmountPx / range).coerceIn(0f, 1f)
+                sheetProgress = next
+                if (next > 0.01f) showNowPlaying = true
+            },
+            onVerticalDragEnd = { velocityYPxPerSec ->
+                val range = currentDragRangePx
+                val progressVel = -velocityYPxPerSec / range
+                val shouldOpen = velocityYPxPerSec < -520f ||
+                    (sheetProgress > 0.24f && velocityYPxPerSec < 420f)
+                animatePlayerSheet(
+                    target = if (shouldOpen) 1f else 0f,
+                    initialVelocity = progressVel,
+                    fromDrag = true,
                 )
-            }
-        }
+            },
+            onVerticalDragCancel = {
+                animatePlayerSheet(
+                    target = if (sheetProgress > 0.5f) 1f else 0f,
+                    fromDrag = true,
+                )
+            },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+        )
 
-        // Scrim progresivo sobre la biblioteca mientras el reproductor se abre o cierra.
-        if (sheetTrack != null && sheetProgress > 0.001f) {
+        // Scrim progresivo sobre la sección secundaria mientras el reproductor está abierto o en tránsito.
+        if (sheetProgress > 0.001f) {
             val blockBackgroundTouches = showNowPlaying || sheetProgress > 0.08f || isSheetDragging
             Box(
                 modifier = Modifier
@@ -601,24 +580,57 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
             )
         }
 
-        if ((showNowPlaying || sheetProgress > 0.001f || isSheetDragging) &&
-            sheetTrack != null && sheetController != null
-        ) {
+        if (showNowPlaying || sheetProgress > 0.001f || isSheetDragging) {
             NowPlayingSheet(
                 track = sheetTrack,
                 controller = sheetController,
                 isPlaying = playback.isPlaying,
+                hasPermission = hasPermission,
+                isScanning = library.isScanning,
                 output = output,
                 analysis = analysis,
-                audioConfig = audioConfig,
                 sheetProgress = sheetProgress,
+                lyricsProgress = playerLyricsProgress,
+                allowLyricsBack = !modalOpen,
+                isFavorite = sheetTrack?.uri?.toString() in favoriteUris,
+                onToggleFavorite = {
+                    sheetTrack?.takeIf { it.isLocal }?.let { LibraryInsights.toggleFavorite(it.uri.toString()) }
+                },
                 interactiveEnabled = showNowPlaying || sheetProgress > 0.08f || isSheetDragging,
                 maxArtDp = maxArtDp,
                 playPauseScale = playPauseScale,
                 miniArtRectProvider = resolveMiniArtRect,
                 fullArtSlotRectProvider = resolveFullArtSlotRect,
-                onFullArtSlotMeasured = { measuredRect ->
-                    fullArtSlotRect = measuredRect
+                onFullArtSlotMeasured = { artCoords ->
+                    val root = rootCoords
+                    if (root != null && root.isAttached && artCoords.isAttached) {
+                        fullArtSlotRect = root.localBoundingBoxOf(artCoords, clipBounds = false)
+                    }
+                },
+                onLyricsArtSlotMeasured = { artCoords ->
+                    val root = rootCoords
+                    if (root != null && root.isAttached && artCoords.isAttached) {
+                        lyricsArtSlotRect = root.localBoundingBoxOf(artCoords, clipBounds = false)
+                    }
+                },
+                onLyricsDragStart = { lyricsAnimJob?.cancel() },
+                onLyricsDragDelta = { amount ->
+                    playerLyricsProgress = (playerLyricsProgress - amount / lyricsDragRangePx).coerceIn(0f, 1f)
+                },
+                onLyricsDragEnd = { velocity ->
+                    val open = shouldOpenLyrics(playerLyricsProgress, velocity)
+                    animateLyrics(if (open) 1f else 0f, -velocity / lyricsDragRangePx)
+                },
+                onLyricsDragCancel = {
+                    animateLyrics(if (playerLyricsProgress > 0.5f) 1f else 0f)
+                },
+                onOpenLyrics = { animateLyrics(1f) },
+                onCloseLyrics = { animateLyrics(0f) },
+                onRequestPermission = { permissionLauncher.launch(audioPermissions()) },
+                onFallbackPlayFirst = {
+                    if (library.tracks.isNotEmpty()) {
+                        playTrackList(controller, library.tracks, 0)
+                    }
                 },
                 onVerticalDragStart = {
                     sheetAnimJob?.cancel()
@@ -647,20 +659,35 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
                     )
                 },
                 onDismiss = { animatePlayerSheet(target = 0f, fromDrag = false) },
-                onOpenQueue = { showQueueSheet = true },
                 onOpenSignalPath = { showSignalPath = true },
+                onOpenLibraryShortcut = {
+                    viewModel.openLibraryRoot()
+                    activeSection = AppSection.LIBRARY
+                    animatePlayerSheet(target = 0f, fromDrag = false)
+                },
+                onOpenEqualizerShortcut = {
+                    activeSection = AppSection.EQUALIZER
+                    animatePlayerSheet(target = 0f, fromDrag = false)
+                },
+                onOpenSearchShortcut = {
+                    activeSection = AppSection.SEARCH
+                    animatePlayerSheet(target = 0f, fromDrag = false)
+                },
+                onOpenSettingsShortcut = {
+                    showSettings = true
+                },
             )
         }
 
         // Carátula compartida en vuelo diagonal (MiniPlayer 48dp izq ↔ Reproductor grande)
-        // con desenfoque dinámico durante el arrastre, idéntico al GIF de referencia.
-        if (sheetTrack != null && sheetProgress > 0.001f && sheetProgress < 0.998f) {
+        if (sheetProgress > 0.001f && sheetProgress < 0.998f) {
             SharedTransitionArtwork(
                 track = sheetTrack,
                 sheetProgress = sheetProgress,
+                lyricsProgress = playerLyricsProgress,
                 isSheetDragging = isSheetDragging,
                 wasSheetDragged = wasSheetDragged,
-                playPauseScale = playPauseScale,
+                baseArtDp = maxArtDp,
                 miniArtRectProvider = resolveMiniArtRect,
                 fullArtSlotRectProvider = resolveFullArtSlotRect,
             )
@@ -673,7 +700,7 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
-                .padding(bottom = if (playback.current != null && sheetProgress < 0.2f) 92.dp else 24.dp, start = 16.dp, end = 16.dp),
+                .padding(bottom = if (sheetProgress < 0.2f) 92.dp else 24.dp, start = 16.dp, end = 16.dp),
         ) {
             Surface(
                 color = InkElevated,
@@ -752,6 +779,7 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
         AudioSignalPathSheet(
             track = playback.current ?: library.tracks.firstOrNull(),
             output = output,
+            onRequestUsb = { UsbDacManager.requestPermission(context) },
             onDismiss = { showSignalPath = false },
         )
     }
@@ -779,6 +807,19 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
             onInspectClick = viewModel::setInspectTrack,
             onMessage = { msg -> userMessage = msg },
             onDismiss = { viewModel.selectArtist(null) },
+        )
+    }
+
+    library.selectedTagGroup?.let { group ->
+        TagGroupDetailSheet(
+            group = group,
+            currentUri = playback.current?.uri,
+            isPlaying = playback.isPlaying,
+            controller = controller,
+            onTrackClick = { index -> playTrackList(controller, group.tracks, index) },
+            onInspectClick = viewModel::setInspectTrack,
+            onMessage = { msg -> userMessage = msg },
+            onDismiss = { viewModel.selectTagGroup(null) },
         )
     }
 
@@ -898,169 +939,7 @@ private fun rememberPlaybackState(
 }
 
 @Composable
-private fun Header(
-    trackCount: Int,
-    scanning: Boolean,
-    outputName: String,
-    outputKind: String,
-    isDac: Boolean,
-    isBitPerfect: Boolean,
-    hasUsbPerm: Boolean,
-    error: String?,
-    onRequestUsb: () -> Unit,
-    onOpenSignalPath: () -> Unit,
-    onOpenSettings: () -> Unit,
-) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 12.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "KUKOSIN",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = Gold,
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    if (isDac || isBitPerfect) {
-                        Surface(
-                            color = Gold.copy(alpha = 0.15f),
-                            shape = RoundedCornerShape(6.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Gold.copy(alpha = 0.5f)),
-                            modifier = Modifier.clickable(onClick = onOpenSignalPath),
-                        ) {
-                            Text(
-                                text = "BIT-PERFECT",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Gold,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = "Biblioteca HiFi",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = Cream,
-                )
-                Text(
-                    text = when {
-                        scanning -> "Escaneando metadatos y codecs…"
-                        trackCount == 0 -> "FLAC, WAV, ALAC, DSD, APE, YTM Stream"
-                        else -> "$trackCount pistas locales"
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = CreamMuted,
-                )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .padding(top = 4.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable(onClick = onOpenSignalPath)
-                        .padding(vertical = 2.dp),
-                ) {
-                    if (isDac) {
-                        Icon(
-                            imageVector = Icons.Rounded.Usb,
-                            contentDescription = null,
-                            tint = Gold,
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Spacer(Modifier.width(4.dp))
-                    }
-                    Text(
-                        text = if (isDac) "DAC USB · $outputName (Ver Ruta ↓)" else "$outputKind · $outputName (Ver Ruta ↓)",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Gold,
-                    )
-                }
-                if (isDac && !hasUsbPerm) {
-                    TextButton(onClick = onRequestUsb) {
-                        Text("★ Conceder permiso USB Host", color = Gold, style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-                if (error != null) {
-                    Text(
-                        text = error,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Gold,
-                        modifier = Modifier.padding(top = 6.dp),
-                    )
-                }
-            }
-            IconButton(onClick = onOpenSettings) {
-                Icon(
-                    imageVector = Icons.Rounded.Settings,
-                    contentDescription = "Configuración",
-                    tint = Gold,
-                    modifier = Modifier.size(28.dp),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun LibraryTabs(
-    activeTab: LibraryTab,
-    onTabSelected: (LibraryTab) -> Unit,
-) {
-    val tabs = LibraryTab.entries
-    ScrollableTabRow(
-        selectedTabIndex = activeTab.ordinal,
-        containerColor = Color.Transparent,
-        contentColor = Gold,
-        edgePadding = 16.dp,
-        indicator = { tabPositions ->
-            TabRowDefaults.SecondaryIndicator(
-                Modifier.tabIndicatorOffset(tabPositions[activeTab.ordinal]),
-                color = Gold,
-            )
-        },
-    ) {
-        tabs.forEach { tab ->
-            val label = when (tab) {
-                LibraryTab.CANCIONES -> "Canciones"
-                LibraryTab.ALBUMES -> "Álbumes"
-                LibraryTab.ARTISTAS -> "Artistas"
-                LibraryTab.CARPETAS -> "Carpetas"
-                LibraryTab.YOUTUBE_MUSIC -> "YouTube Music"
-            }
-            Tab(
-                selected = activeTab == tab,
-                onClick = { onTabSelected(tab) },
-                text = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (tab == LibraryTab.YOUTUBE_MUSIC) {
-                            Icon(Icons.Rounded.Cloud, contentDescription = null, tint = if (activeTab == tab) Gold else CreamMuted, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(4.dp))
-                        }
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = if (activeTab == tab) Gold else CreamMuted,
-                            fontWeight = if (activeTab == tab) FontWeight.Bold else FontWeight.Normal,
-                        )
-                    }
-                },
-            )
-        }
-    }
-}
-
-@Composable
-private fun SearchField(query: String, onQueryChange: (String) -> Unit) {
+internal fun SearchField(query: String, onQueryChange: (String) -> Unit) {
     OutlinedTextField(
         value = query,
         onValueChange = onQueryChange,
@@ -1084,7 +963,7 @@ private fun SearchField(query: String, onQueryChange: (String) -> Unit) {
 }
 
 @Composable
-private fun YtmView(
+internal fun YtmView(
     ytmTracks: List<YtmTrack>,
     ytmQuery: String,
     isSearching: Boolean,
@@ -1245,7 +1124,7 @@ private fun YtmTrackRow(
 }
 
 @Composable
-private fun PermissionCard(onGrant: () -> Unit) {
+internal fun PermissionCard(onGrant: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1279,7 +1158,7 @@ private fun PermissionCard(onGrant: () -> Unit) {
 }
 
 @Composable
-private fun LoadingLibrary() {
+internal fun LoadingLibrary() {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             CircularProgressIndicator(color = Gold)
@@ -1290,7 +1169,7 @@ private fun LoadingLibrary() {
 }
 
 @Composable
-private fun EmptyLibrary(hasQuery: Boolean) {
+internal fun EmptyLibrary(hasQuery: Boolean) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Text(
             text = if (hasQuery) "Nada coincide con la búsqueda" else "No hay archivos de audio indexados",
@@ -1300,7 +1179,7 @@ private fun EmptyLibrary(hasQuery: Boolean) {
 }
 
 @Composable
-private fun TrackList(
+internal fun TrackList(
     tracks: List<Track>,
     currentUri: android.net.Uri?,
     isPlaying: Boolean,
@@ -1308,6 +1187,7 @@ private fun TrackList(
     onTrackClick: (Int) -> Unit,
     onInspectClick: (Track) -> Unit,
     onMessage: ((String) -> Unit)? = null,
+    extraLabel: ((Track) -> String)? = null,
     modifier: Modifier = Modifier,
     bottomPadding: Int,
 ) {
@@ -1329,6 +1209,7 @@ private fun TrackList(
                 onClick = { onTrackClick(index) },
                 onInspect = { onInspectClick(track) },
                 onMessage = onMessage,
+                extraLabel = extraLabel?.invoke(track),
             )
         }
     }
@@ -1344,6 +1225,7 @@ private fun TrackRow(
     onClick: () -> Unit,
     onInspect: (() -> Unit)? = null,
     onMessage: ((String) -> Unit)? = null,
+    extraLabel: String? = null,
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var swipeHandled by remember { mutableStateOf(false) }
@@ -1473,7 +1355,7 @@ private fun TrackRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        track.qualityLabel,
+                        listOfNotNull(track.qualityLabel, extraLabel).joinToString(" · "),
                         style = MaterialTheme.typography.labelSmall,
                         color = Gold.copy(alpha = 0.85f),
                         maxLines = 1,
@@ -1512,7 +1394,7 @@ private fun TrackRow(
 }
 
 @Composable
-private fun AlbumView(
+internal fun AlbumView(
     albums: List<AlbumGroup>,
     onAlbumClick: (AlbumGroup) -> Unit,
     modifier: Modifier = Modifier,
@@ -1603,7 +1485,7 @@ private fun AlbumCard(album: AlbumGroup, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ArtistView(
+internal fun ArtistView(
     artists: List<ArtistGroup>,
     onArtistClick: (ArtistGroup) -> Unit,
     modifier: Modifier = Modifier,
@@ -1658,7 +1540,7 @@ private fun ArtistRow(artist: ArtistGroup, onClick: () -> Unit) {
 }
 
 @Composable
-private fun FolderBrowserView(
+internal fun FolderBrowserView(
     currentFolder: FolderNode?,
     folderPath: List<FolderNode>,
     currentUri: android.net.Uri?,
@@ -1770,7 +1652,7 @@ private fun scaleRectAroundCenter(rect: Rect, scale: Float): Rect {
 
 @Composable
 internal fun Artwork(
-    track: Track,
+    track: Track?,
     modifier: Modifier = Modifier,
     artworkUri: Uri? = null,
     cornerRadius: Dp = 12.dp,
@@ -1782,22 +1664,26 @@ internal fun Artwork(
         contentAlignment = Alignment.Center,
     ) {
         Icon(Icons.Rounded.MusicNote, contentDescription = null, tint = CreamMuted)
-        AsyncImage(
-            model = artworkUri ?: track.artworkUri,
-            contentDescription = track.album,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize(),
-        )
+        val image = artworkUri ?: track?.artworkUri
+        if (image != null) {
+            AsyncImage(
+                model = image,
+                contentDescription = track?.album,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
 
 @Composable
 private fun SharedTransitionArtwork(
-    track: Track,
+    track: Track?,
     sheetProgress: Float,
+    lyricsProgress: Float,
     isSheetDragging: Boolean,
     wasSheetDragged: Boolean,
-    playPauseScale: Float,
+    baseArtDp: Dp,
     miniArtRectProvider: () -> Rect,
     fullArtSlotRectProvider: () -> Rect,
 ) {
@@ -1816,16 +1702,15 @@ private fun SharedTransitionArtwork(
         label = "sharedArtworkTransitBlur",
     )
 
-    // Tamaño base fijo (340.dp) para cargar siempre la carátula en alta resolución y
-    // escalar/trasladar 100% en GPU vía graphicsLayer sin re-layout por frame.
-    val baseArtDp = 340.dp
+    // El tamaño base coincide con el slot real: también cabe en pantallas estrechas,
+    // y se escala/traslada en GPU sin re-layout durante cada frame.
     Box(
         modifier = Modifier
             .size(baseArtDp)
             .graphicsLayer {
                 val prog = sheetProgress.coerceIn(0f, 1f)
                 val miniR = miniArtRectProvider()
-                val fullR = scaleRectAroundCenter(fullArtSlotRectProvider(), playPauseScale)
+                val fullR = fullArtSlotRectProvider()
                 val curR = lerpRect(miniR, fullR, prog)
                 val basePx = baseArtDp.toPx().coerceAtLeast(1f)
                 val sx = (curR.width / basePx).coerceAtLeast(0.05f)
@@ -1835,7 +1720,8 @@ private fun SharedTransitionArtwork(
                 scaleX = sx
                 scaleY = sy
                 transformOrigin = TransformOrigin(0f, 0f)
-                val desiredCornerDp = 12.dp + (20.dp - 12.dp) * prog
+                val fullCorner = 20.dp - 8.dp * lyricsProgress.coerceIn(0f, 1f)
+                val desiredCornerDp = 12.dp + (fullCorner - 12.dp) * prog
                 shape = RoundedCornerShape(desiredCornerDp / sx)
                 clip = true
                 shadowElevation = (4.dp + 20.dp * sin(prog * PI).toFloat()).toPx()
@@ -1863,7 +1749,7 @@ private fun SharedTransitionArtwork(
 
 @Composable
 private fun MiniPlayer(
-    track: Track,
+    track: Track?,
     isPlaying: Boolean,
     progress: Float,
     isDac: Boolean,
@@ -1884,162 +1770,202 @@ private fun MiniPlayer(
     val currentOnDragEnd by rememberUpdatedState(onVerticalDragEnd)
     val currentOnDragCancel by rememberUpdatedState(onVerticalDragCancel)
 
-    Surface(
-        modifier = modifier
-            .fillMaxWidth()
-            .graphicsLayer {
-                val p = sheetProgress.coerceIn(0f, 1f)
-                alpha = (1f - (p / 0.28f)).coerceIn(0f, 1f)
-                translationY = -p * 42.dp.toPx()
-            }
-            .pointerInput(Unit) {
-                val tracker = VelocityTracker()
-                detectVerticalDragGestures(
-                    onDragStart = {
-                        tracker.resetTracking()
-                        currentOnDragStart()
-                    },
-                    onVerticalDrag = { change, dragAmount ->
-                        change.consume()
-                        tracker.addPosition(change.uptimeMillis, change.position)
-                        currentOnDragDelta(dragAmount)
-                    },
-                    onDragEnd = {
-                        currentOnDragEnd(tracker.calculateVelocity().y)
-                    },
-                    onDragCancel = {
-                        currentOnDragCancel()
-                    },
-                )
-            },
-        shape = RoundedCornerShape(24.dp),
-        color = InkSoft,
-        tonalElevation = 0.dp,
-        shadowElevation = 12.dp,
-    ) {
-        Column {
-            LinearProgressIndicator(
-                progress = { progress.coerceIn(0f, 1f) },
-                modifier = Modifier.fillMaxWidth(),
-                color = Gold,
-                trackColor = Ink,
-            )
-            Row(
-                modifier = Modifier
-                    .clickable(enabled = sheetProgress < 0.08f, onClick = onOpen)
-                    .padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .onGloballyPositioned(onArtMeasured)
-                        .graphicsLayer {
-                            alpha = if (sheetProgress > 0.001f) 0f else 1f
-                        },
-                ) {
-                    Artwork(track, Modifier.fillMaxSize())
+    // Se mide fuera de graphicsLayer: es la posición en reposo incluso en el primer vuelo.
+    Box(modifier = modifier.fillMaxWidth()) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .graphicsLayer {
+                    val p = sheetProgress.coerceIn(0f, 1f)
+                    alpha = (1f - p / 0.28f).coerceIn(0f, 1f)
+                    translationY = -p * 42.dp.toPx()
                 }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Cream, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                        if (isDac) {
-                            Spacer(Modifier.width(6.dp))
-                            Surface(
-                                color = Gold,
-                                shape = RoundedCornerShape(4.dp),
-                                modifier = Modifier.clickable(onClick = onOpenSignalPath),
-                            ) {
-                                Text("DAC", style = MaterialTheme.typography.labelSmall, color = Ink, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp))
+                .pointerInput(Unit) {
+                    val tracker = VelocityTracker()
+                    detectVerticalDragGestures(
+                        onDragStart = {
+                            tracker.resetTracking()
+                            currentOnDragStart()
+                        },
+                        onVerticalDrag = { change, amount ->
+                            change.consume()
+                            tracker.addPosition(change.uptimeMillis, change.position)
+                            currentOnDragDelta(amount)
+                        },
+                        onDragEnd = { currentOnDragEnd(tracker.calculateVelocity().y) },
+                        onDragCancel = { currentOnDragCancel() },
+                    )
+                },
+            shape = RoundedCornerShape(24.dp),
+            color = InkSoft,
+            tonalElevation = 0.dp,
+            shadowElevation = 12.dp,
+        ) {
+            Column {
+                LinearProgressIndicator(
+                    progress = { progress.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Gold,
+                    trackColor = Ink,
+                )
+                Row(
+                    modifier = Modifier
+                        .clickable(enabled = sheetProgress < 0.08f, onClick = onOpen)
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .graphicsLayer { alpha = if (sheetProgress > 0.001f) 0f else 1f },
+                    ) {
+                        Artwork(track, Modifier.fillMaxSize())
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                track?.title ?: "Sin canción seleccionada",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                color = Cream,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            if (isDac) {
+                                Spacer(Modifier.width(6.dp))
+                                Surface(
+                                    color = Gold,
+                                    shape = RoundedCornerShape(4.dp),
+                                    modifier = Modifier.clickable(onClick = onOpenSignalPath),
+                                ) {
+                                    Text("DAC", style = MaterialTheme.typography.labelSmall, color = Ink, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp))
+                                }
                             }
                         }
+                        Text(
+                            track?.let { "${it.effectiveArtist} · ${it.codecLabel}" } ?: "Abre el reproductor",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = CreamMuted,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
                     }
-                    Text("${track.effectiveArtist} · ${track.codecLabel}", maxLines = 1, overflow = TextOverflow.Ellipsis, color = CreamMuted, style = MaterialTheme.typography.bodyMedium)
-                }
-                IconButton(onClick = onToggle, enabled = sheetProgress < 0.1f) {
-                    Icon(
-                        if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = if (isPlaying) "Pausar" else "Reproducir",
-                        tint = Gold,
-                    )
-                }
-                IconButton(onClick = onNext, enabled = sheetProgress < 0.1f) {
-                    Icon(Icons.Rounded.SkipNext, contentDescription = "Siguiente", tint = Cream)
+                    IconButton(onClick = onToggle, enabled = sheetProgress < 0.1f && track != null) {
+                        Icon(
+                            if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                            contentDescription = if (isPlaying) "Pausar" else "Reproducir",
+                            tint = Gold,
+                        )
+                    }
+                    IconButton(onClick = onNext, enabled = sheetProgress < 0.1f && track != null) {
+                        Icon(Icons.Rounded.SkipNext, contentDescription = "Siguiente", tint = Cream)
+                    }
                 }
             }
         }
+        // 4 dp de la barra + 12 dp de padding de la fila.
+        Box(
+            Modifier
+                .padding(start = 12.dp, top = 16.dp)
+                .size(48.dp)
+                .onGloballyPositioned(onArtMeasured),
+        )
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NowPlayingSheet(
-    track: Track,
-    controller: MediaController,
+    track: Track?,
+    controller: MediaController?,
     isPlaying: Boolean,
+    hasPermission: Boolean,
+    isScanning: Boolean,
     output: OutputDevice,
     analysis: com.kukosin.app.data.analysis.AudioAnalysis?,
-    audioConfig: com.kukosin.app.playback.AudioConfig,
     sheetProgress: Float,
+    lyricsProgress: Float,
+    allowLyricsBack: Boolean,
+    isFavorite: Boolean,
+    onToggleFavorite: () -> Unit,
     interactiveEnabled: Boolean,
     maxArtDp: Dp,
     playPauseScale: Float,
     miniArtRectProvider: () -> Rect,
     fullArtSlotRectProvider: () -> Rect,
-    onFullArtSlotMeasured: (Rect) -> Unit,
+    onFullArtSlotMeasured: (LayoutCoordinates) -> Unit,
+    onLyricsArtSlotMeasured: (LayoutCoordinates) -> Unit,
+    onLyricsDragStart: () -> Unit,
+    onLyricsDragDelta: (Float) -> Unit,
+    onLyricsDragEnd: (Float) -> Unit,
+    onLyricsDragCancel: () -> Unit,
+    onOpenLyrics: () -> Unit,
+    onCloseLyrics: () -> Unit,
+    onRequestPermission: () -> Unit,
+    onFallbackPlayFirst: () -> Unit,
     onVerticalDragStart: () -> Unit,
     onVerticalDragDelta: (Float) -> Unit,
     onVerticalDragEnd: (Float) -> Unit,
     onVerticalDragCancel: () -> Unit,
     onDismiss: () -> Unit,
-    onOpenQueue: () -> Unit,
     onOpenSignalPath: () -> Unit,
+    onOpenLibraryShortcut: () -> Unit,
+    onOpenEqualizerShortcut: () -> Unit,
+    onOpenSearchShortcut: () -> Unit,
+    onOpenSettingsShortcut: () -> Unit,
 ) {
-    var position by remember { mutableLongStateOf(controller.currentPosition) }
-    var duration by remember { mutableLongStateOf(controller.duration.coerceAtLeast(0)) }
-    var showLyrics by remember { mutableStateOf(false) }
-    var chromeVisible by remember { mutableStateOf(true) }
-    val gestureScope = rememberCoroutineScope()
+    var position by remember(controller) { mutableLongStateOf(controller?.currentPosition ?: 0L) }
+    var duration by remember(controller) { mutableLongStateOf((controller?.duration ?: 0L).coerceAtLeast(0L)) }
     var dragX by remember { mutableFloatStateOf(0f) }
-    val chromeScope = rememberCoroutineScope()
-    var chromeRevealJob by remember { mutableStateOf<Job?>(null) }
+    var horizontalJob by remember { mutableStateOf<Job?>(null) }
+    var previousArt by remember { mutableStateOf<Uri?>(null) }
+    var nextArt by remember { mutableStateOf<Uri?>(null) }
+    var hasPrevious by remember { mutableStateOf(false) }
+    var hasNext by remember { mutableStateOf(false) }
+    val gestureScope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    val artworkWidthPx = with(density) { maxArtDp.toPx() }
+    val cornerArtWidthPx = with(density) { 56.dp.toPx() }
+    var sheetCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var centerArtRect by remember { mutableStateOf(Rect.Zero) }
+    var cornerArtRect by remember { mutableStateOf(Rect.Zero) }
 
-    var sheetStaticCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    // Los gestos largos leen siempre los callbacks y progresos más recientes, sin reiniciar
+    // pointerInput a mitad del arrastre cuando cambia el progreso de letras o del reproductor.
+    val currentLyricsProgress by rememberUpdatedState(lyricsProgress)
+    val currentSheetProgress by rememberUpdatedState(sheetProgress)
+    val currentInteractive by rememberUpdatedState(interactiveEnabled)
+    val currentArtScale by rememberUpdatedState(playPauseScale)
+    val currentOnLyricsStart by rememberUpdatedState(onLyricsDragStart)
+    val currentOnLyricsDelta by rememberUpdatedState(onLyricsDragDelta)
+    val currentOnLyricsEnd by rememberUpdatedState(onLyricsDragEnd)
+    val currentOnLyricsCancel by rememberUpdatedState(onLyricsDragCancel)
+    val currentOnSheetStart by rememberUpdatedState(onVerticalDragStart)
+    val currentOnSheetDelta by rememberUpdatedState(onVerticalDragDelta)
+    val currentOnSheetEnd by rememberUpdatedState(onVerticalDragEnd)
+    val currentOnSheetCancel by rememberUpdatedState(onVerticalDragCancel)
 
-    val currentOnVDragStart by rememberUpdatedState(onVerticalDragStart)
-    val currentOnVDragDelta by rememberUpdatedState(onVerticalDragDelta)
-    val currentOnVDragEnd by rememberUpdatedState(onVerticalDragEnd)
-    val currentOnVDragCancel by rememberUpdatedState(onVerticalDragCancel)
-
-    val currentLyrics = analysis?.takeIf { it.uri == track.uri }?.lyrics
-
-    BackHandler(enabled = showLyrics && sheetProgress > 0.9f) {
-        showLyrics = false
+    BackHandler(enabled = allowLyricsBack && lyricsProgress > 0.01f && sheetProgress > 0.9f) {
+        onCloseLyrics()
     }
 
-    // Si empieza a cerrarse estando en letras, volvemos a la carátula para que vuele al MiniPlayer.
-    LaunchedEffect(sheetProgress < 0.96f) {
-        if (sheetProgress < 0.96f && showLyrics) {
-            showLyrics = false
+    val currentLyrics = analysis?.takeIf { track != null && it.uri == track.uri }?.lyrics
+    val context = LocalContext.current
+    var realWaveform by remember(track?.uri) { mutableStateOf<List<Float>?>(null) }
+    val flatWaveform = remember { List(180) { 0f } }
+    LaunchedEffect(track?.uri) {
+        realWaveform = null
+        val selected = track
+        if (selected != null && selected.isLocal) {
+            realWaveform = com.kukosin.app.data.analysis.WaveformExtractor.getWaveform(context, selected, 180)
         }
     }
-
-    LaunchedEffect(showLyrics) {
-        chromeRevealJob?.cancel()
-        chromeVisible = true
-    }
-
-    val onLyricsScroll: (Boolean) -> Unit = { scrolling ->
-        if (scrolling) {
-            chromeRevealJob?.cancel()
-            chromeVisible = false
-        } else {
-            chromeRevealJob?.cancel()
-            chromeRevealJob = chromeScope.launch {
-                delay(2500)
-                chromeVisible = true
-            }
+    LaunchedEffect(controller) {
+        while (isActive) {
+            position = controller?.currentPosition ?: 0L
+            duration = (controller?.duration ?: 0L).coerceAtLeast(0L)
+            delay(32L)
         }
     }
 
@@ -2049,149 +1975,212 @@ private fun NowPlayingSheet(
         label = "artworkDragBlur",
     )
     val artworkAlpha by animateFloatAsState(
-        targetValue = if (dragX != 0f) (1f - (abs(dragX) / 90f).coerceIn(0f, 1f)) else 1f,
+        targetValue = if (dragX != 0f) 1f - (abs(dragX) / 90f).coerceIn(0f, 1f) else 1f,
         animationSpec = tween(120),
         label = "artworkDragAlpha",
     )
 
-    /** URI del arte de la canción que está [offset] posiciones respecto a la actual. */
-    fun trackArtworkUriAt(offset: Int): Uri? {
-        val index = controller.currentMediaItemIndex + offset
-        if (index !in 0 until controller.mediaItemCount) return null
-        val item = controller.getMediaItemAt(index)
-        val itemUri = item.localConfiguration?.uri
-        return if (itemUri != null && (itemUri.scheme == "content" || itemUri.scheme == "file")) {
-            EmbeddedArtwork.uriFor(itemUri)
+    fun artworkAt(offset: Int): Uri? {
+        val player = controller ?: return null
+        val index = player.currentMediaItemIndex + offset
+        if (index !in 0 until player.mediaItemCount) return null
+        val item = player.getMediaItemAt(index)
+        val uri = item.localConfiguration?.uri
+        return if (uri != null && (uri.scheme == "content" || uri.scheme == "file")) {
+            EmbeddedArtwork.uriFor(uri)
         } else {
-            item.mediaMetadata?.artworkUri
+            item.mediaMetadata.artworkUri
         }
     }
 
-    val artworkWidthPx = with(LocalDensity.current) { maxArtDp.toPx() }
-    val dragThreshold = (artworkWidthPx * 0.35f).coerceAtLeast(60f)
-
-    // ── Waveform real de la canción (silencio = plano, no picos falsos) ─────
-    val context = LocalContext.current
-    var realWaveform by remember(track.uri) { mutableStateOf<List<Float>?>(null) }
-    LaunchedEffect(track.uri) {
-        realWaveform = null
-        if (track.isLocal) {
-            realWaveform = com.kukosin.app.data.analysis.WaveformExtractor.getWaveform(context, track, 180)
+    // La animación se ejecuta fuera del AwaitPointerEventScope restringido; dragX es
+    // la única fuente de verdad tanto al arrastrar como al completar/cancelar el gesto.
+    fun settleHorizontal(step: Float, velocityX: Float, cancelled: Boolean) {
+        val player = controller
+        val threshold = (step * 0.35f).coerceAtLeast(30f)
+        val flingThreshold = step * SWIPE_FLING_FACTOR
+        val goNext = dragX < -threshold || velocityX < -flingThreshold
+        val goPrevious = dragX > threshold || velocityX > flingThreshold
+        horizontalJob?.cancel()
+        horizontalJob = gestureScope.launch {
+            suspend fun snapBack() {
+                animate(dragX, 0f, animationSpec = spring(0.9f, Spring.StiffnessMediumLow)) { value, _ ->
+                    dragX = value
+                }
+            }
+            val next = !cancelled && goNext && player?.hasNextMediaItem() == true
+            val previous = !cancelled && goPrevious && player?.hasPreviousMediaItem() == true
+            if (player != null && (next || previous)) {
+                animate(
+                    initialValue = dragX,
+                    targetValue = if (next) -step else step,
+                    animationSpec = tween(240, easing = FastOutSlowInEasing),
+                ) { value, _ -> dragX = value }
+                val oldIndex = player.currentMediaItemIndex
+                val switched = try {
+                    if (next) player.seekToNext() else player.seekToPrevious()
+                    awaitIndexChange(player, oldIndex)
+                } catch (cancel: kotlinx.coroutines.CancellationException) {
+                    throw cancel
+                } catch (error: Exception) {
+                    Log.w("KukosinSwipe", "No se pudo cambiar de pista", error)
+                    false
+                }
+                if (switched) {
+                    // La vecina permanece centrada hasta que el controlador publique la nueva pista.
+                    withFrameNanos { }
+                    dragX = 0f
+                } else {
+                    snapBack()
+                }
+            } else {
+                snapBack()
+            }
         }
     }
 
-    LaunchedEffect(controller, showLyrics) {
-        while (isActive) {
-            position = controller.currentPosition
-            duration = controller.duration.coerceAtLeast(0)
-            delay(if (showLyrics) 50L else 32L) // 30fps para movimiento fluido de la onda
-        }
-    }
-
-    val verticalDismissModifier = if (interactiveEnabled) {
-        Modifier.pointerInput(showLyrics) {
-            if (showLyrics) return@pointerInput
+    // Un solo reconocedor con bloqueo de eje: horizontal cambia de tema; vertical hacia
+    // arriba revela letras; vertical hacia abajo minimiza o cierra letras si están abiertas.
+    val coverGesture = Modifier.pointerInput(controller, track?.uri, maxArtDp) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            if (!currentInteractive || currentSheetProgress < 0.98f) return@awaitEachGesture
             val tracker = VelocityTracker()
-            detectVerticalDragGestures(
-                onDragStart = {
+            tracker.addPosition(down.uptimeMillis, down.position)
+            var axis: CoverGestureAxis? = null
+            var totalX = 0f
+            var totalY = 0f
+            var swipeStep = artworkWidthPx.coerceAtLeast(1f)
+            var finished = false
+            try {
+                while (true) {
+                    val event = awaitPointerEvent()
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    tracker.addPosition(change.uptimeMillis, change.position)
+                    if (change.isConsumed) break
+                    if (!change.pressed) {
+                        val velocity = tracker.calculateVelocity()
+                        when (axis) {
+                            CoverGestureAxis.TRACK -> settleHorizontal(swipeStep, velocity.x, cancelled = false)
+                            CoverGestureAxis.LYRICS -> currentOnLyricsEnd(velocity.y)
+                            CoverGestureAxis.MINIMIZE -> currentOnSheetEnd(velocity.y)
+                            null -> Unit
+                        }
+                        if (axis != null) change.consume()
+                        finished = true
+                        break
+                    }
+                    var dx = change.position.x - change.previousPosition.x
+                    var dy = change.position.y - change.previousPosition.y
+                    if (axis == null) {
+                        totalX += dx
+                        totalY += dy
+                        val slop = viewConfiguration.touchSlop
+                        axis = classifyCoverGesture(totalX, totalY, currentLyricsProgress, slop) ?: continue
+                        dx = if (totalX > 0f) (totalX - slop).coerceAtLeast(0f) else (totalX + slop).coerceAtMost(0f)
+                        dy = if (totalY > 0f) (totalY - slop).coerceAtLeast(0f) else (totalY + slop).coerceAtMost(0f)
+                        when (axis) {
+                            CoverGestureAxis.TRACK -> {
+                                horizontalJob?.cancel()
+                                swipeStep = lerpFloat(
+                                    artworkWidthPx * currentArtScale,
+                                    cornerArtWidthPx,
+                                    currentLyricsProgress.coerceIn(0f, 1f),
+                                ).coerceAtLeast(1f)
+                                hasPrevious = controller?.hasPreviousMediaItem() == true
+                                hasNext = controller?.hasNextMediaItem() == true
+                                previousArt = artworkAt(-1)
+                                nextArt = artworkAt(1)
+                            }
+                            CoverGestureAxis.LYRICS -> currentOnLyricsStart()
+                            CoverGestureAxis.MINIMIZE -> currentOnSheetStart()
+                        }
+                    }
+                    when (axis) {
+                        CoverGestureAxis.TRACK -> {
+                            val raw = dragX + dx
+                            val blocked = (raw > 0f && !hasPrevious) || (raw < 0f && !hasNext)
+                            dragX = if (blocked) dragX + dx * SWIPE_EDGE_RESISTANCE
+                                else raw.coerceIn(-swipeStep, swipeStep)
+                        }
+                        CoverGestureAxis.LYRICS -> currentOnLyricsDelta(dy)
+                        CoverGestureAxis.MINIMIZE -> currentOnSheetDelta(dy)
+                    }
+                    change.consume()
+                }
+            } finally {
+                if (!finished) {
+                    when (axis) {
+                        CoverGestureAxis.TRACK -> settleHorizontal(swipeStep, 0f, cancelled = true)
+                        CoverGestureAxis.LYRICS -> currentOnLyricsCancel()
+                        CoverGestureAxis.MINIMIZE -> currentOnSheetCancel()
+                        null -> Unit
+                    }
+                }
+            }
+        }
+    }
+
+    // La cabecera permite cerrar letras con un arrastre, sin robar el scroll del panel.
+    val headerDrag = Modifier.pointerInput(Unit) {
+        val tracker = VelocityTracker()
+        var draggingLyrics = false
+        detectVerticalDragGestures(
+            onDragStart = {
+                if (currentInteractive) {
                     tracker.resetTracking()
-                    currentOnVDragStart()
-                },
-                onVerticalDrag = { change, dragAmount ->
+                    draggingLyrics = currentLyricsProgress > 0.01f
+                    if (draggingLyrics) currentOnLyricsStart() else currentOnSheetStart()
+                }
+            },
+            onVerticalDrag = { change, amount ->
+                if (currentInteractive) {
                     change.consume()
                     tracker.addPosition(change.uptimeMillis, change.position)
-                    currentOnVDragDelta(dragAmount)
-                },
-                onDragEnd = {
-                    currentOnVDragEnd(tracker.calculateVelocity().y)
-                },
-                onDragCancel = {
-                    currentOnVDragCancel()
-                },
-            )
-        }
-    } else {
-        Modifier
+                    if (draggingLyrics) currentOnLyricsDelta(amount) else currentOnSheetDelta(amount)
+                }
+            },
+            onDragEnd = {
+                if (currentInteractive) {
+                    val velocity = tracker.calculateVelocity().y
+                    if (draggingLyrics) currentOnLyricsEnd(velocity) else currentOnSheetEnd(velocity)
+                }
+            },
+            onDragCancel = {
+                if (currentInteractive) {
+                    if (draggingLyrics) currentOnLyricsCancel() else currentOnSheetCancel()
+                }
+            },
+        )
     }
-
-    val headerDismissModifier = if (interactiveEnabled) {
-        Modifier.pointerInput(Unit) {
-            val tracker = VelocityTracker()
-            detectVerticalDragGestures(
-                onDragStart = {
-                    tracker.resetTracking()
-                    currentOnVDragStart()
-                },
-                onVerticalDrag = { change, dragAmount ->
-                    change.consume()
-                    tracker.addPosition(change.uptimeMillis, change.position)
-                    currentOnVDragDelta(dragAmount)
-                },
-                onDragEnd = {
-                    currentOnVDragEnd(tracker.calculateVelocity().y)
-                },
-                onDragCancel = {
-                    currentOnVDragCancel()
-                },
-            )
-        }
-    } else {
-        Modifier
-    }
+    val bodyDismiss = if (interactiveEnabled && lyricsProgress <= 0.001f) headerDrag else Modifier
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .onGloballyPositioned { coords ->
-                sheetStaticCoords = coords
-            }
-            .then(verticalDismissModifier),
+            .onGloballyPositioned { sheetCoords = it }
+            .then(bodyDismiss),
     ) {
-        // Fondo deslizante del reproductor: acompaña el borde superior de la carátula en tránsito
-        // con esquinas redondeadas y fade progresivo, tal como en el GIF.
+        // El fondo sigue a la carátula durante el morph con el MiniPlayer.
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
                     val p = sheetProgress.coerceIn(0f, 1f)
-                    val miniR = miniArtRectProvider()
-                    val fullR = scaleRectAroundCenter(fullArtSlotRectProvider(), playPauseScale)
-                    val curR = lerpRect(miniR, fullR, p)
-                    val topDelta = (curR.top - fullR.top).coerceAtLeast(0f)
-                    translationY = topDelta
+                    val full = fullArtSlotRectProvider()
+                    val current = lerpRect(miniArtRectProvider(), full, p)
+                    translationY = (current.top - full.top).coerceAtLeast(0f)
                     alpha = ((p - 0.04f) / 0.76f).coerceIn(0f, 1f)
                     val topCorner = 28.dp * (1f - p)
                     shape = RoundedCornerShape(topStart = topCorner, topEnd = topCorner)
                     clip = true
                 }
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(InkElevated, Ink, Ink),
-                    ),
-                )
-                .then(
-                    if (interactiveEnabled) {
-                        Modifier.pointerInput(Unit) {
-                            detectTapGestures { /* absorbe toques internos para no cerrar el scrim */ }
-                        }
-                    } else {
-                        Modifier
-                    },
-                ),
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(1.dp)
-                    .graphicsLayer {
-                        alpha = (1f - sheetProgress.coerceIn(0f, 1f)) * 0.6f
-                    }
-                    .background(Line),
-            )
-        }
+                .background(Brush.verticalGradient(listOf(InkElevated, Ink, Ink)))
+                .pointerInput(Unit) { detectTapGestures { } },
+        )
 
-        // Contenido principal SIN graphicsLayer intermedio sobre el slot de carátula, de modo
-        // que `localBoundingBoxOf` mida siempre su destino real estático en p = 1f.
+        // Los dos slots se miden sin capas transformadas en sus ancestros. Así el arte
+        // compartido y el arte de letras utilizan exactamente los mismos rectángulos.
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -2200,17 +2189,15 @@ private fun NowPlayingSheet(
                 .padding(horizontal = 24.dp, vertical = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // Cabecera + píldora de arrastre ("EN REPRODUCCIÓN"): viaja pegada sobre la carátula
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .then(headerDismissModifier)
+                    .then(headerDrag)
                     .graphicsLayer {
                         val p = sheetProgress.coerceIn(0f, 1f)
-                        val miniR = miniArtRectProvider()
-                        val fullR = scaleRectAroundCenter(fullArtSlotRectProvider(), playPauseScale)
-                        val curR = lerpRect(miniR, fullR, p)
-                        translationY = (curR.top - fullR.top).coerceAtLeast(0f)
+                        val full = fullArtSlotRectProvider()
+                        val current = lerpRect(miniArtRectProvider(), full, p)
+                        translationY = (current.top - full.top).coerceAtLeast(0f)
                         alpha = ((p - 0.12f) / 0.72f).coerceIn(0f, 1f)
                     },
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -2223,432 +2210,338 @@ private fun NowPlayingSheet(
                         .clip(RoundedCornerShape(50))
                         .background(CreamMuted.copy(alpha = 0.45f)),
                 )
-
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     IconButton(onClick = onDismiss, enabled = interactiveEnabled) {
-                        Icon(
-                            Icons.Rounded.KeyboardArrowDown,
-                            contentDescription = "Minimizar",
-                            tint = CreamMuted,
-                            modifier = Modifier.size(32.dp),
-                        )
+                        Icon(Icons.Rounded.KeyboardArrowDown, "Minimizar", tint = CreamMuted, modifier = Modifier.size(32.dp))
                     }
-
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("EN REPRODUCCIÓN", style = MaterialTheme.typography.labelMedium, color = Gold, fontWeight = FontWeight.Bold)
                         Text(
-                            "EN REPRODUCCIÓN",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = Gold,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Text(
-                            if (track.isLocal) "Música local" else "YouTube Music",
+                            if (track == null) "Tu música" else if (track.isLocal) "Música local" else "YouTube Music",
                             style = MaterialTheme.typography.labelSmall,
                             color = CreamMuted,
                         )
                     }
-
-                    IconButton(onClick = onOpenQueue, enabled = interactiveEnabled) {
-                        if (audioConfig.showQueueBadge && controller.mediaItemCount > 0) {
-                            BadgedBox(
-                                badge = {
-                                    Badge(
-                                        containerColor = Gold,
-                                        contentColor = Ink,
-                                    ) {
-                                        Text("${controller.mediaItemCount}", fontWeight = FontWeight.Bold)
-                                    }
-                                },
-                            ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
-                                    contentDescription = "Cola de reproducción",
-                                    tint = Gold,
-                                    modifier = Modifier.size(26.dp),
-                                )
-                            }
-                        } else {
+                    if (track?.isLocal == true) {
+                        IconButton(onClick = onToggleFavorite, enabled = interactiveEnabled) {
                             Icon(
-                                imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
-                                contentDescription = "Cola de reproducción",
-                                tint = Gold,
-                                modifier = Modifier.size(26.dp),
+                                imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                contentDescription = if (isFavorite) "Quitar de favoritos" else "Añadir a favoritos",
+                                tint = if (isFavorite) Gold else CreamMuted,
+                                modifier = Modifier.size(25.dp),
                             )
                         }
+                    } else {
+                        Spacer(Modifier.size(48.dp))
                     }
                 }
             }
 
-            Spacer(Modifier.height(8.dp))
-
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-            ) {
-                val artworkAndControlsContent: @Composable () -> Unit = {
-                    Column(
-                        modifier = Modifier.fillMaxSize(),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                    ) {
-                        // Slot estático de la carátula expandida (sin graphicsLayer ancestral).
-                        Box(
-                            modifier = Modifier
-                                .size(maxArtDp)
-                                .onGloballyPositioned { artCoords ->
-                                    val root = sheetStaticCoords
-                                    if (root != null && root.isAttached && artCoords.isAttached) {
-                                        onFullArtSlotMeasured(
-                                            root.localBoundingBoxOf(artCoords, clipBounds = false),
-                                        )
-                                    }
-                                }
-                                .then(
-                                    if (sheetProgress >= 0.98f) {
-                                        Modifier.pointerInput(track.uri.toString(), maxArtDp) {
-                                            val step = artworkWidthPx
-                                            val threshold = dragThreshold
-                                            val flingThreshold = step * SWIPE_FLING_FACTOR
-                                            val tracker = VelocityTracker()
-
-                                            suspend fun animateDragTo(target: Float, spec: AnimationSpec<Float>) {
-                                                val from = dragX
-                                                animate(from, target, animationSpec = spec) { value, _ ->
-                                                    dragX = value
-                                                }
-                                            }
-
-                                            suspend fun snapBack() {
-                                                animateDragTo(0f, spring(0.9f, Spring.StiffnessMediumLow))
-                                            }
-
-                                            suspend fun commit(goNext: Boolean) {
-                                                animateDragTo(
-                                                    if (goNext) -step else step,
-                                                    tween(240, easing = FastOutSlowInEasing),
-                                                )
-                                                val switched = try {
-                                                    val previousIndex = controller.currentMediaItemIndex
-                                                    if (goNext) controller.seekToNext() else controller.seekToPrevious()
-                                                    awaitIndexChange(controller, previousIndex)
-                                                } catch (throwable: Throwable) {
-                                                    false
-                                                }
-                                                Log.d(
-                                                    "KukosinSwipe",
-                                                    "commit ${if (goNext) "siguiente" else "anterior"}: " +
-                                                        "se cambio=$switched, indice=${controller.currentMediaItemIndex}",
-                                                )
-                                                if (switched) {
-                                                    withFrameNanos { }
-                                                    dragX = 0f
-                                                } else {
-                                                    snapBack()
-                                                }
-                                            }
-
-                                            detectHorizontalDragGestures(
-                                                onDragStart = {
-                                                    tracker.resetTracking()
-                                                    dragX = 0f
-                                                },
-                                                onHorizontalDrag = { change, dragAmount ->
-                                                    change.consume()
-                                                    tracker.addPosition(change.uptimeMillis, change.position)
-                                                    val raw = dragX + dragAmount
-                                                    val blocked =
-                                                        (raw > 0f && !controller.hasPreviousMediaItem()) ||
-                                                            (raw < 0f && !controller.hasNextMediaItem())
-                                                    dragX = if (blocked) {
-                                                        dragX + dragAmount * SWIPE_EDGE_RESISTANCE
-                                                    } else {
-                                                        raw
-                                                    }
-                                                },
-                                                onDragEnd = {
-                                                    val velocity = tracker.calculateVelocity().x
-                                                    val goNext = dragX < -threshold || velocity < -flingThreshold
-                                                    val goPrevious = dragX > threshold || velocity > flingThreshold
-                                                    gestureScope.launch {
-                                                        when {
-                                                            goNext && controller.hasNextMediaItem() -> commit(goNext = true)
-                                                            goPrevious && controller.hasPreviousMediaItem() ->
-                                                                commit(goNext = false)
-                                                            else -> snapBack()
-                                                        }
-                                                    }
-                                                },
-                                                onDragCancel = {
-                                                    gestureScope.launch { snapBack() }
-                                                },
-                                            )
-                                        }
-                                    } else {
-                                        Modifier
-                                    },
-                                ),
-                        ) {
-                            val progress = (abs(dragX) / artworkWidthPx).coerceIn(0f, 1f)
-                            val direction = if (dragX > 0f) 1 else if (dragX < 0f) -1 else 0
-
-                            val incomingUri = when (direction) {
-                                1 -> trackArtworkUriAt(-1)
-                                -1 -> trackArtworkUriAt(+1)
-                                else -> null
-                            }
-                            if (incomingUri != null && dragX != 0f && sheetProgress >= 0.998f) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(maxArtDp)
-                                        .clip(RoundedCornerShape(20.dp))
-                                        .graphicsLayer {
-                                            translationX = if (dragX > 0f) dragX - artworkWidthPx else dragX + artworkWidthPx
-                                            alpha = progress
-                                        },
-                                ) {
-                                    AsyncImage(
-                                        model = incomingUri,
-                                        contentDescription = null,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize(),
-                                    )
+            Spacer(Modifier.height(4.dp))
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(maxArtDp)
+                            .onGloballyPositioned { coords ->
+                                val root = sheetCoords
+                                if (root != null && root.isAttached && coords.isAttached) {
+                                    centerArtRect = root.localBoundingBoxOf(coords, clipBounds = false)
+                                    onFullArtSlotMeasured(coords)
                                 }
                             }
-
-                            // Durante el vuelo (sheetProgress < 0.998f) se oculta esta copia interna
-                            // porque SharedTransitionArtwork dibuja la carátula viajando en diagonal.
-                            Box(
-                                modifier = Modifier
-                                    .size(maxArtDp)
-                                    .blur(artworkBlur, edgeTreatment = BlurredEdgeTreatment.Unbounded)
-                                    .graphicsLayer {
-                                        val inFlight = sheetProgress < 0.998f
-                                        val s = playPauseScale.coerceAtLeast(0.1f)
-                                        translationX = dragX
-                                        scaleX = s
-                                        scaleY = s
-                                        shape = RoundedCornerShape(20.dp / s)
-                                        clip = true
-                                        alpha = if (inFlight) 0f else artworkAlpha
-                                    },
-                            ) {
-                                Artwork(
-                                    track = track,
-                                    modifier = Modifier.fillMaxSize(),
-                                    cornerRadius = 0.dp,
-                                )
-                            }
-                        }
-
-                        // Bloque inferior (título, ruta de señal y waveform): viaja anclado justo
-                        // debajo del borde inferior de la carátula en tránsito, igual que en el GIF.
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .graphicsLayer {
-                                    val p = sheetProgress.coerceIn(0f, 1f)
-                                    val miniR = miniArtRectProvider()
-                                    val fullR = scaleRectAroundCenter(fullArtSlotRectProvider(), playPauseScale)
-                                    val curR = lerpRect(miniR, fullR, p)
-                                    translationY = curR.bottom - fullR.bottom
-                                    alpha = ((p - 0.10f) / 0.72f).coerceIn(0f, 1f)
+                            .then(
+                                if (lyricsProgress < 0.5f) {
+                                    Modifier.semantics { contentDescription = "Carátula. Toca o desliza hacia arriba para abrir letras" }
+                                } else {
+                                    Modifier.clearAndSetSemantics { }
                                 },
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            Spacer(Modifier.height(20.dp))
-                            Text(
-                                track.title,
-                                style = MaterialTheme.typography.headlineMedium,
-                                color = Cream,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 2,
-                                textAlign = TextAlign.Center,
                             )
-                            Spacer(Modifier.height(4.dp))
+                            .clickable(enabled = interactiveEnabled, onClick = onOpenLyrics)
+                            .then(coverGesture),
+                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .graphicsLayer {
+                                val p = sheetProgress.coerceIn(0f, 1f)
+                                val lp = lyricsProgress.coerceIn(0f, 1f)
+                                val full = fullArtSlotRectProvider()
+                                val current = lerpRect(miniArtRectProvider(), full, p)
+                                translationY = current.bottom - full.bottom - 30.dp.toPx() * lp
+                                translationX = -20.dp.toPx() * lp
+                                alpha = ((p - 0.10f) / 0.72f).coerceIn(0f, 1f) * (1f - lp * 1.4f).coerceIn(0f, 1f)
+                            },
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = track?.title ?: "Tu música empieza aquí",
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = Cream,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
+                        )
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            text = track?.let { "${it.effectiveArtist} — ${it.album}" }
+                                ?: if (isScanning) "Escaneando tu biblioteca…" else "Elige una canción en Biblioteca o Búsqueda",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = CreamMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
+                        )
+                        Spacer(Modifier.height(5.dp))
+                        if (track != null) {
                             Text(
-                                "${track.effectiveArtist} — ${track.album}",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = CreamMuted,
+                                text = "Desliza ↑ o toca la carátula para abrir letras",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = CreamMuted.copy(alpha = 0.8f),
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
                             )
-                            Spacer(Modifier.height(8.dp))
+                            Spacer(Modifier.height(5.dp))
                             Surface(
                                 color = InkSoft,
-                                shape = RoundedCornerShape(12.dp),
-                                border = BorderStroke(1.dp, Gold.copy(alpha = 0.5f)),
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, Gold.copy(alpha = 0.42f)),
                                 modifier = Modifier.clickable(enabled = interactiveEnabled, onClick = onOpenSignalPath),
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Icon(
-                                        imageVector = if (output.isDac) Icons.Rounded.Usb else Icons.Rounded.GraphicEq,
+                                        if (output.isDac) Icons.Rounded.Usb else Icons.Rounded.GraphicEq,
                                         contentDescription = null,
                                         tint = Gold,
-                                        modifier = Modifier.size(18.dp),
+                                        modifier = Modifier.size(16.dp),
                                     )
-                                    Spacer(Modifier.width(8.dp))
+                                    Spacer(Modifier.width(6.dp))
                                     Text(
-                                        if (output.isDac) "Bit-Perfect hacia ${output.name} (Ver Ruta ↓)" else "Salida · ${output.name} (Ver Ruta ↓)",
-                                        style = MaterialTheme.typography.bodyMedium,
+                                        "${track.qualityLabel} · ${output.name}",
+                                        style = MaterialTheme.typography.labelMedium,
                                         color = Gold,
                                         fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
                                     )
                                 }
                             }
-                            Spacer(Modifier.height(16.dp))
-                            KukosinWaveformSlider(
-                                progress = if (duration > 0) position.toFloat() / duration else 0f,
-                                onSeek = { if (interactiveEnabled) controller.seekTo((it * duration).toLong()) },
-                                waveform = realWaveform,
-                                trackKey = track.uri.toString(),
-                                isPlaying = isPlaying,
-                                onPlayPause = {
-                                    if (interactiveEnabled) {
-                                        if (controller.isPlaying) controller.pause() else controller.play()
-                                    }
-                                },
-                                onPrev = { if (interactiveEnabled) controller.seekToPrevious() },
-                                onNext = { if (interactiveEnabled) controller.seekToNext() },
-                                onShuffle = { if (interactiveEnabled) QueueManager.toggleShuffle(controller) },
-                                onRepeat = {
-                                    if (interactiveEnabled) {
-                                        controller.repeatMode = when (controller.repeatMode) {
-                                            Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
-                                            Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
-                                            else -> Player.REPEAT_MODE_OFF
-                                        }
-                                    }
-                                },
-                                positionLabel = formatTime(position),
-                                durationLabel = formatTime(duration),
-                                modifier = Modifier.fillMaxWidth(),
-                            )
+                        } else if (!hasPermission) {
+                            Button(
+                                onClick = onRequestPermission,
+                                colors = ButtonDefaults.buttonColors(containerColor = Gold, contentColor = Ink),
+                                shape = RoundedCornerShape(12.dp),
+                            ) { Text("Permitir acceso a audio") }
                         }
+                        Spacer(Modifier.height(10.dp))
+                        KukosinWaveformSlider(
+                            progress = if (duration > 0) position.toFloat() / duration else 0f,
+                            onSeek = { fraction -> if (interactiveEnabled) controller?.seekTo((fraction * duration).toLong()) },
+                            waveform = if (track == null) flatWaveform else realWaveform,
+                            trackKey = track?.uri?.toString(),
+                            isPlaying = isPlaying,
+                            enabled = controller != null && track != null && interactiveEnabled,
+                            onPlayPause = {
+                                if (interactiveEnabled && controller != null) {
+                                    when {
+                                        controller.mediaItemCount == 0 -> onFallbackPlayFirst()
+                                        controller.isPlaying -> controller.pause()
+                                        else -> controller.play()
+                                    }
+                                }
+                            },
+                            onPrev = { if (interactiveEnabled) controller?.seekToPrevious() },
+                            onNext = { if (interactiveEnabled) controller?.seekToNext() },
+                            onShuffle = { if (interactiveEnabled && controller != null) QueueManager.toggleShuffle(controller) },
+                            onRepeat = {
+                                if (interactiveEnabled && controller != null) {
+                                    controller.repeatMode = when (controller.repeatMode) {
+                                        Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
+                                        Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+                                        else -> Player.REPEAT_MODE_OFF
+                                    }
+                                }
+                            },
+                            positionLabel = formatTime(position),
+                            durationLabel = formatTime(duration),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                     }
                 }
 
-                if (sheetProgress < 0.98f) {
-                    artworkAndControlsContent()
-                } else {
-                    AnimatedContent(
-                        targetState = showLyrics,
-                        transitionSpec = { fadeIn() togetherWith fadeOut() },
-                        label = "artworkLyricsTransition",
-                        modifier = Modifier.fillMaxSize(),
-                    ) { showingLyrics ->
-                        if (showingLyrics) {
-                            LyricsPanel(
-                                lyrics = currentLyrics,
-                                positionMs = position,
-                                onLineClick = { timeMs -> controller.seekTo(timeMs) },
-                                onScrollActivity = onLyricsScroll,
-                                modifier = Modifier.fillMaxSize(),
-                            )
-                        } else {
-                            artworkAndControlsContent()
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(64.dp)
+                            .then(if (lyricsProgress > 0.01f) headerDrag else Modifier),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(56.dp)
+                                .onGloballyPositioned { coords ->
+                                    val root = sheetCoords
+                                    if (root != null && root.isAttached && coords.isAttached) {
+                                        cornerArtRect = root.localBoundingBoxOf(coords, clipBounds = false)
+                                        onLyricsArtSlotMeasured(coords)
+                                    }
+                                }
+                                .then(
+                                    if (lyricsProgress > 0.01f) {
+                                        Modifier
+                                            .semantics { contentDescription = "Carátula. Toca para cerrar letras" }
+                                            .clickable(onClick = onCloseLyrics)
+                                            .then(coverGesture)
+                                    } else Modifier,
+                                ),
+                        )
+                        if (lyricsProgress > 0.01f) {
+                            Spacer(Modifier.width(12.dp))
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .graphicsLayer {
+                                        alpha = ((lyricsProgress - 0.08f) / 0.62f).coerceIn(0f, 1f) *
+                                            ((sheetProgress - 0.45f) / 0.55f).coerceIn(0f, 1f)
+                                        translationX = (1f - lyricsProgress) * 18.dp.toPx()
+                                    },
+                            ) {
+                                Text(track?.title ?: "Sin canción seleccionada", style = MaterialTheme.typography.titleMedium, color = Cream, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(track?.effectiveArtist ?: "Tu música", style = MaterialTheme.typography.bodySmall, color = CreamMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(track?.qualityLabel ?: "Letras", style = MaterialTheme.typography.labelSmall, color = Gold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            IconButton(onClick = onCloseLyrics, enabled = interactiveEnabled) {
+                                Icon(Icons.Rounded.KeyboardArrowDown, "Cerrar letras", tint = Gold)
+                            }
                         }
+                    }
+                    if (lyricsProgress > 0.01f) {
+                        LyricsPanel(
+                            lyrics = currentLyrics,
+                            positionMs = position,
+                            onLineClick = if (controller != null) { timeMs -> controller.seekTo(timeMs) } else null,
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .graphicsLayer {
+                                    val lp = lyricsProgress.coerceIn(0f, 1f)
+                                    alpha = ((lp - 0.08f) / 0.72f).coerceIn(0f, 1f) *
+                                        ((sheetProgress - 0.45f) / 0.55f).coerceIn(0f, 1f)
+                                    translationY = (1f - lp) * 72.dp.toPx()
+                                },
+                        )
                     }
                 }
             }
 
-            Column(
+            PlayerShortcutBar(
+                enabled = interactiveEnabled,
+                onOpenLibrary = onOpenLibraryShortcut,
+                onOpenEqualizer = onOpenEqualizerShortcut,
+                onOpenSearch = onOpenSearchShortcut,
+                onOpenSettings = onOpenSettingsShortcut,
                 modifier = Modifier
-                    .fillMaxWidth()
+                    .padding(top = 8.dp, bottom = 8.dp)
                     .graphicsLayer {
                         val p = sheetProgress.coerceIn(0f, 1f)
-                        val miniR = miniArtRectProvider()
-                        val fullR = scaleRectAroundCenter(fullArtSlotRectProvider(), playPauseScale)
-                        val curR = lerpRect(miniR, fullR, p)
-                        translationY = curR.bottom - fullR.bottom
+                        val full = fullArtSlotRectProvider()
+                        val current = lerpRect(miniArtRectProvider(), full, p)
+                        translationY = current.bottom - full.bottom
                         alpha = ((p - 0.25f) / 0.65f).coerceIn(0f, 1f)
                     },
-            ) {
-                AnimatedVisibility(
-                    visible = chromeVisible || !showLyrics,
-                    enter = fadeIn(tween(400, easing = FastOutSlowInEasing)) +
-                        expandVertically(
-                            expandFrom = Alignment.Bottom,
-                            animationSpec = tween(400, easing = FastOutSlowInEasing),
-                        ),
-                    exit = fadeOut(tween(300, easing = FastOutSlowInEasing)) +
-                        shrinkVertically(
-                            shrinkTowards = Alignment.Bottom,
-                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                        ),
-                ) {
-                    Column(Modifier.fillMaxWidth()) {
-                        Spacer(Modifier.height(8.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceEvenly,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Surface(
-                                color = InkSoft,
-                                shape = RoundedCornerShape(12.dp),
-                                border = BorderStroke(1.dp, Gold.copy(alpha = 0.5f)),
-                                modifier = Modifier.clickable(enabled = interactiveEnabled) { showLyrics = !showLyrics },
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.MusicNote,
-                                        contentDescription = null,
-                                        tint = Gold,
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(
-                                        if (showLyrics) "Ocultar letras" else if (currentLyrics != null) "Ver letras" else "Sin letras",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = Gold,
-                                        fontWeight = FontWeight.Bold,
-                                    )
-                                }
-                            }
-
-                            Surface(
-                                color = InkSoft,
-                                shape = RoundedCornerShape(12.dp),
-                                border = BorderStroke(1.dp, Gold.copy(alpha = 0.5f)),
-                                modifier = Modifier.clickable(enabled = interactiveEnabled, onClick = onOpenQueue),
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
-                                        contentDescription = null,
-                                        tint = Gold,
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(
-                                        "Cola (${controller.mediaItemCount})",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = Gold,
-                                        fontWeight = FontWeight.Bold,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
+            )
         }
+
+        if (sheetProgress >= 0.998f && centerArtRect != Rect.Zero) {
+            val lp = lyricsProgress.coerceIn(0f, 1f)
+            val step = lerpFloat(artworkWidthPx * playPauseScale, cornerArtWidthPx, lp).coerceAtLeast(1f)
+            val previous = dragX > 0f
+            val showNeighbor = dragX != 0f && if (previous) hasPrevious else hasNext
+            if (showNeighbor) {
+                PlayerMorphingArtwork(
+                    track = null,
+                    artworkOverride = if (previous) previousArt else nextArt,
+                    centerRect = centerArtRect,
+                    cornerRect = cornerArtRect,
+                    lyricsProgress = lp,
+                    baseArtDp = maxArtDp,
+                    playPauseScale = playPauseScale,
+                    offsetX = if (previous) dragX - step else dragX + step,
+                    alpha = (abs(dragX) / step).coerceIn(0f, 1f),
+                    blur = 0.dp,
+                )
+            }
+            PlayerMorphingArtwork(
+                track = track,
+                centerRect = centerArtRect,
+                cornerRect = cornerArtRect,
+                lyricsProgress = lp,
+                baseArtDp = maxArtDp,
+                playPauseScale = playPauseScale,
+                offsetX = dragX,
+                alpha = artworkAlpha,
+                blur = artworkBlur,
+            )
+        }
+    }
+}
+
+/** La misma carátula se desplaza y encoge del centro a la esquina superior izquierda. */
+@Composable
+private fun PlayerMorphingArtwork(
+    track: Track?,
+    centerRect: Rect,
+    cornerRect: Rect,
+    lyricsProgress: Float,
+    baseArtDp: Dp,
+    playPauseScale: Float,
+    offsetX: Float,
+    alpha: Float,
+    blur: Dp,
+    artworkOverride: Uri? = null,
+) {
+    Box(
+        modifier = Modifier
+            .size(baseArtDp)
+            .graphicsLayer {
+                val lp = lyricsProgress.coerceIn(0f, 1f)
+                val center = scaleRectAroundCenter(centerRect, playPauseScale)
+                val corner = if (cornerRect == Rect.Zero) center else cornerRect
+                val destination = lerpRect(center, corner, lp)
+                val basePx = baseArtDp.toPx().coerceAtLeast(1f)
+                val sx = (destination.width / basePx).coerceAtLeast(0.01f)
+                val sy = (destination.height / basePx).coerceAtLeast(0.01f)
+                translationX = destination.left + offsetX
+                translationY = destination.top
+                scaleX = sx
+                scaleY = sy
+                transformOrigin = TransformOrigin(0f, 0f)
+                shape = RoundedCornerShape((20.dp - 8.dp * lp) / sx)
+                clip = true
+                this.alpha = alpha.coerceIn(0f, 1f)
+            },
+    ) {
+        Artwork(
+            track = track,
+            artworkUri = artworkOverride,
+            cornerRadius = 0.dp,
+            modifier = Modifier
+                .fillMaxSize()
+                .then(if (blur > 0.2.dp) Modifier.blur(blur, edgeTreatment = BlurredEdgeTreatment.Rectangle) else Modifier),
+        )
     }
 }
 
@@ -2657,6 +2550,7 @@ private fun NowPlayingSheet(
 private fun AudioSignalPathSheet(
     track: Track?,
     output: OutputDevice,
+    onRequestUsb: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -2692,6 +2586,11 @@ private fun AudioSignalPathSheet(
                         style = MaterialTheme.typography.bodySmall,
                         color = CreamMuted,
                     )
+                }
+            }
+            if (output.isUsb && !output.hasUsbPermission) {
+                TextButton(onClick = onRequestUsb) {
+                    Text("Conceder permiso USB Host", color = Gold, fontWeight = FontWeight.Bold)
                 }
             }
             Spacer(Modifier.height(16.dp))

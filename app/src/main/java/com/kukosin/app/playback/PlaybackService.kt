@@ -1,5 +1,6 @@
 package com.kukosin.app.playback
 
+import android.net.Uri
 import android.util.Log
 import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
@@ -16,6 +17,7 @@ import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import com.kukosin.app.data.LibraryInsights
 import com.kukosin.app.data.ytm.YtmService
 import com.kukosin.app.data.ytm.describeYtmError
 import kotlinx.coroutines.CoroutineScope
@@ -36,7 +38,28 @@ class PlaybackService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private var player: ExoPlayer? = null
     private var settingsJob: Job? = null
+    private var restoringCurrentItem = false
     private val serviceScope = CoroutineScope(Dispatchers.Main)
+    private val playbackStartTracker = PlaybackStartTracker { key ->
+        val scheme = Uri.parse(key).scheme
+        if (scheme == "content" || scheme == "file") LibraryInsights.recordPlay(key)
+    }
+    private val playbackCountListener = object : Player.Listener {
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            playbackStartTracker.onTransition(
+                key = mediaItem?.localConfiguration?.uri?.toString(),
+                preserveIfSame = restoringCurrentItem && reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED,
+                isPlaying = player?.isPlaying == true,
+            )
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            playbackStartTracker.onPlayingChanged(
+                key = player?.currentMediaItem?.localConfiguration?.uri?.toString(),
+                isPlaying = isPlaying,
+            )
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -83,13 +106,19 @@ class PlaybackService : MediaSessionService() {
 
         AudioRoute.attach(this, newPlayer)
         newPlayer.addListener(prefetchListener)
+        newPlayer.addListener(playbackCountListener)
         mediaSession = MediaSession.Builder(this, newPlayer).build()
         player = newPlayer
 
         if (currentItems != null && currentItems.first.isNotEmpty()) {
             val (items, index, posPlaying) = currentItems
-            newPlayer.setMediaItems(items, index, posPlaying.first)
-            newPlayer.prepare()
+            restoringCurrentItem = true
+            try {
+                newPlayer.setMediaItems(items, index, posPlaying.first)
+                newPlayer.prepare()
+            } finally {
+                restoringCurrentItem = false
+            }
             if (posPlaying.second) {
                 newPlayer.play()
             }
@@ -165,6 +194,7 @@ class PlaybackService : MediaSessionService() {
     override fun onDestroy() {
         settingsJob?.cancel()
         player?.removeListener(prefetchListener)
+        player?.removeListener(playbackCountListener)
         AudioRoute.detach()
         mediaSession?.run {
             release()

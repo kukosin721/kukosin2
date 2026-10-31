@@ -41,3 +41,21 @@ data class ArtistGroup(
     val albumCount: Int
         get() = albums.size
 }
+
+data class TagCategoryGroup(
+    val name: String,
+    val subtitle: String,
+    val tracks: List<Track>,
+) {
+    val trackCount: Int
+        get() = tracks.size
+
+    val totalDurationMs: Long
+        get() = tracks.sumOf { it.durationMs }
+
+    val artworkUri
+        get() = tracks.firstOrNull()?.artworkUri
+
+    val isHiRes: Boolean
+        get() = tracks.any { it.isHiRes }
+}

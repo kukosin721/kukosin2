@@ -56,6 +56,7 @@ fun KukosinWaveformSlider(
     waveform: List<Float>? = null,
     trackKey: String? = null, // pásale track.uri.toString() o "title|artist" -> onda única por canción
     isPlaying: Boolean = true,
+    enabled: Boolean = true,
     onPlayPause: () -> Unit = {},
     onPrev: () -> Unit = {},
     onNext: () -> Unit = {},
@@ -140,7 +141,8 @@ fun KukosinWaveformSlider(
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
-                .pointerInput(bars) {
+                .pointerInput(bars, enabled) {
+                    if (!enabled) return@pointerInput
                     val sensitivity = 0.22f // más lenta y precisa (antes 0.32)
                     var startProgress = 0f
 
@@ -162,7 +164,8 @@ fun KukosinWaveformSlider(
                         dragProgress = (dragProgress!! + delta).coerceIn(0f, 1f)
                     }
                 }
-                .pointerInput(bars, trackKey) {
+                .pointerInput(bars, trackKey, enabled) {
+                    if (!enabled) return@pointerInput
                     detectTapGestures { offset ->
                         val centerX = size.width / 2f
                         val delta = (offset.x - centerX) * 0.22f / size.width.toFloat()
@@ -237,30 +240,35 @@ fun KukosinWaveformSlider(
             ) {
                 IconButton(
                     onClick = onShuffle,
+                    enabled = enabled,
                     modifier = Modifier.size(38.dp),
                     colors = IconButtonDefaults.iconButtonColors(contentColor = Cream.copy(alpha = 0.46f)),
                 ) { Icon(Icons.Rounded.FastRewind, null, Modifier.size(20.dp)) }
                 Spacer(Modifier.width(6.dp))
                 IconButton(
                     onClick = onPrev,
+                    enabled = enabled,
                     modifier = Modifier.size(52.dp).background(InkElevated, CircleShape).border(1.dp, Gold.copy(alpha = 0.32f), CircleShape),
                     colors = IconButtonDefaults.iconButtonColors(contentColor = Cream),
                 ) { Icon(Icons.Rounded.SkipPrevious, "Ant", Modifier.size(26.dp)) }
                 Spacer(Modifier.width(12.dp))
                 IconButton(
                     onClick = onPlayPause,
+                    enabled = enabled,
                     modifier = Modifier.size(68.dp).background(Gold, CircleShape).border(1.2.dp, GoldDim, CircleShape),
                     colors = IconButtonDefaults.iconButtonColors(contentColor = Ink),
                 ) { Icon(if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, null, Modifier.size(36.dp)) }
                 Spacer(Modifier.width(12.dp))
                 IconButton(
                     onClick = onNext,
+                    enabled = enabled,
                     modifier = Modifier.size(52.dp).background(InkElevated, CircleShape).border(1.dp, Gold.copy(alpha = 0.32f), CircleShape),
                     colors = IconButtonDefaults.iconButtonColors(contentColor = Cream),
                 ) { Icon(Icons.Rounded.SkipNext, "Sig", Modifier.size(26.dp)) }
                 Spacer(Modifier.width(6.dp))
                 IconButton(
                     onClick = onRepeat,
+                    enabled = enabled,
                     modifier = Modifier.size(38.dp),
                     colors = IconButtonDefaults.iconButtonColors(contentColor = Cream.copy(alpha = 0.46f)),
                 ) { Icon(Icons.Rounded.FastForward, null, Modifier.size(20.dp)) }

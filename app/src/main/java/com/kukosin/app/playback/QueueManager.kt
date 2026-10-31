@@ -77,6 +77,22 @@ object QueueManager {
         playItems(controller, tracks.map(Track::toMediaItem), index)
     }
 
+    /**
+     * Prepara la biblioteca en el reproductor en pausa si aún no hay nada cargado (estilo Poweramp),
+     * para que la pantalla principal del reproductor tenga canción y carátula listas al abrir.
+     */
+    fun cueTracksIfEmpty(controller: MediaController, tracks: List<Track>) {
+        if (tracks.isEmpty() || controller.mediaItemCount > 0) return
+        val items = tracks.map(Track::toMediaItem)
+        baseOrder = items
+        resetCustom()
+        _shuffleEnabled.value = false
+        controller.shuffleModeEnabled = false
+        controller.playWhenReady = false
+        controller.setMediaItems(items, 0, 0L)
+        controller.prepare()
+    }
+
     fun playItems(controller: MediaController, items: List<MediaItem>, index: Int) {
         if (items.isEmpty()) return
         val safeIndex = index.coerceIn(0, items.lastIndex)

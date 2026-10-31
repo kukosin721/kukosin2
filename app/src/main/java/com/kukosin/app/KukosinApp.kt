@@ -5,6 +5,7 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
+import com.kukosin.app.data.LibraryInsights
 import com.kukosin.app.data.artwork.EmbeddedArtwork
 import com.kukosin.app.ui.theme.AccentTheme
 
@@ -21,6 +22,7 @@ class KukosinApp : Application(), ImageLoaderFactory {
         super.onCreate()
         // Color de acento guardado por el usuario, antes de que se dibuje cualquier pantalla.
         AccentTheme.init(this)
+        LibraryInsights.init(this)
     }
 
     override fun newImageLoader(): ImageLoader = ImageLoader.Builder(this)
