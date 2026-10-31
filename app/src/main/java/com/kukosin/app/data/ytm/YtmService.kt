@@ -84,6 +84,10 @@ object YtmService {
     /** Filtro de búsqueda de YouTube Music: solo canciones. */
     private const val MUSIC_SONGS_FILTER = "music_songs"
 
+    /** `=w226-h226` / `=s176` en las URLs de lh3.googleusercontent.com. */
+    private val THUMBNAIL_SIZE = Regex("=w\\d+-h\\d+")
+    private val THUMBNAIL_SQUARE = Regex("=s\\d+")
+
     /** Esquema de las URIs "simbólicas" de YTM: el audio real se resuelve al abrir el stream. */
     const val STREAM_SCHEME = "kukosin-ytm"
 
@@ -261,6 +265,18 @@ object YtmService {
 
     //region Helpers
 
+    /**
+     * El extractor devuelve la miniatura con el tamaño incrustado en la URL (`=w226-h226`),
+     * pero Google sirve la imagen original si se le pide más grande. Con esto la carátula del
+     * reproductor deja de verse pixelada.
+     */
+    private fun upscaleThumbnailUrl(url: String): String {
+        if (url.isBlank()) return url
+        var out = THUMBNAIL_SIZE.replace(url, "=w1080-h1080")
+        out = THUMBNAIL_SQUARE.replace(out, "=s1080")
+        return out
+    }
+
     private fun StreamInfoItem.toYtmTrack(): YtmTrack? {
         val videoId = extractVideoId(url) ?: return null
         val thumbnail = thumbnails
@@ -273,7 +289,7 @@ object YtmService {
             id = videoId,
             title = name.ifBlank { "Canción de YouTube Music" },
             artist = uploaderName.ifBlank { "Artista desconocido" },
-            thumbnailUri = thumbnail,
+            thumbnailUri = upscaleThumbnailUrl(thumbnail),
             durationMs = duration.coerceAtLeast(0L) * 1000L,
         )
     }

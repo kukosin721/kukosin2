@@ -111,6 +111,15 @@ Esos tiempos son los que medí de verdad desde un JVM contra el extractor real
    lateral de las filas ("reproducir siguiente" / quitar) debe seguir funcionando
    igual que antes.
 
+### E2. Calidad de carátulas
+
+1. Abre un tema local cuyo FLAC/MP3 tenga portada de buena calidad → en el sheet la carátula
+   debe verse nítida al tamaño completo, no pixelada.
+2. Compara con la notificación: ahí sigue la del sistema (puede verse más chica; es esperado).
+3. En YouTube Music, busca un tema y abre el reproductor: la miniatura debe llegar a 1080 px
+   (`=w1080-h1080` en la URL). Si el tema no tiene arte grande en Google, se verá igual: es el
+   máximo disponible en origen.
+
 ### F. Regresión: que lo local siga intacto
 
 Esto es lo que más me importa que verifiques, porque toqué la fuente de datos del

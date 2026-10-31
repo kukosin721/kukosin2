@@ -142,6 +142,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
+import com.kukosin.app.data.artwork.EmbeddedArtwork
 import com.kukosin.app.data.ytm.YtmService
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.blur
@@ -1681,9 +1682,16 @@ private fun NowPlayingSheet(
     /** URI del arte de la canción que está [offset] posiciones respecto a la actual. */
     fun trackArtworkUriAt(offset: Int): Uri? {
         val index = controller.currentMediaItemIndex + offset
-        return if (index in 0 until controller.mediaItemCount) {
-            controller.getMediaItemAt(index).mediaMetadata?.artworkUri
-        } else null
+        if (index !in 0 until controller.mediaItemCount) return null
+        val item = controller.getMediaItemAt(index)
+        val itemUri = item.localConfiguration?.uri
+        // En los archivos locales la metadata lleva la carátula del sistema (chica); para
+        // dibujar se usa la embebida, igual que el resto de la interfaz.
+        return if (itemUri != null && (itemUri.scheme == "content" || itemUri.scheme == "file")) {
+            EmbeddedArtwork.uriFor(itemUri)
+        } else {
+            item.mediaMetadata?.artworkUri
+        }
     }
 
     val artworkWidthPx = with(LocalDensity.current) { artworkSize.toPx() }

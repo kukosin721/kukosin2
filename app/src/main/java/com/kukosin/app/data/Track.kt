@@ -1,6 +1,7 @@
 package com.kukosin.app.data
 
 import android.net.Uri
+import com.kukosin.app.data.artwork.EmbeddedArtwork
 import androidx.core.net.toUri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -33,7 +34,18 @@ data class Track(
     /** Códec ya resuelto por el servicio de streaming (WebM/Opus, etc.). */
     val streamCodecLabel: String = "",
 ) {
+    /**
+     * Carátula para mostrar en la app: sale del propio archivo a resolución completa
+     * (ver [EmbeddedArtwork]); antes era la miniatura de MediaStore, que se veía borrosa.
+     */
     val artworkUri: Uri
+        get() = artworkOverride ?: EmbeddedArtwork.uriFor(uri, albumId)
+
+    /**
+     * Carátula para el sistema (notificación, pantalla de bloqueo): la de MediaStore, porque
+     * la carga media3 con su decodificador y no entiende el esquema de [artworkUri].
+     */
+    val systemArtworkUri: Uri
         get() = artworkOverride ?: "content://media/external/audio/albumart/$albumId".toUri()
 
     val codecLabel: String
@@ -84,7 +96,7 @@ data class Track(
             .setArtist(effectiveArtist)
             .setAlbumTitle(album)
             .setAlbumArtist(effectiveAlbumArtist)
-            .setArtworkUri(artworkUri)
+            .setArtworkUri(systemArtworkUri)
             .setTrackNumber(if (trackNumber > 0) trackNumber else null)
             .setDiscNumber(if (discNumber > 0) discNumber else null)
             .setGenre(genre.ifBlank { null })
