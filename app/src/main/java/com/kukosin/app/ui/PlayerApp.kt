@@ -564,7 +564,6 @@ private fun MediaItem.toStreamTrack(): Track {
         streamCodecLabel = "YouTube Music",
         albumId = 0L,
         fileName = "",
-        mimeType = mediaMetadata.mimeType ?: "",
     )
 }
 
@@ -1613,10 +1612,15 @@ private fun NowPlayingSheet(
     var chromeVisible by remember { mutableStateOf(true) }
     var volume by remember { mutableFloatStateOf(controller.volume) }
     var lastVolume by remember { mutableFloatStateOf(1f) }
-    // Offset del gesto en px. Animatable permite seguirlo con el dedo (snapTo) y animarlo al
-    // soltar (animateTo) en vez de saltar de golpe al cambiar de canción.
-    val dragOffset = remember { Animatable(0f) }
-    val dragX = dragOffset.value
+    // Dentro de `awaitEachGesture` (AwaitPointerEventScope está restringido) no se pueden
+    // llamar suspend functions ajenas, así que el dedo escribe estado plano y la animación de
+    // cierre se lanza al salir del gesto. Se pinta una u otra según si hay animación en curso.
+    // PointerInputScope no es CoroutineScope, así que las animaciones de cierre se lanzan
+    // en un scope de la composición (se cancela solo cuando el sheet sale de pantalla).
+    val gestureScope = rememberCoroutineScope()
+    var liveDrag by remember { mutableFloatStateOf(0f) }
+    val settleOffset = remember { Animatable(0f) }
+    val dragX = if (settleOffset.isRunning) settleOffset.value else liveDrag
     val chromeScope = rememberCoroutineScope()
     var chromeRevealJob by remember { mutableStateOf<Job?>(null) }
 
@@ -1782,90 +1786,108 @@ private fun NowPlayingSheet(
                             modifier = Modifier
                                 .size(artworkSize)
                                 .pointerInput(track.uri.toString(), artworkSize) {
-                                    val scope = this
                                     val step = artworkWidthPx
                                     val threshold = dragThreshold
                                     val flingThreshold = step * SWIPE_FLING_FACTOR
 
                                     suspend fun snapBack() {
-                                        dragOffset.animateTo(0f, spring(0.9f, Spring.StiffnessMediumLow))
+                                        settleOffset.snapTo(liveDrag)
+                                        settleOffset.animateTo(0f, spring(0.9f, Spring.StiffnessMediumLow))
+                                        liveDrag = 0f
                                     }
 
                                     // Lleva la carátula hasta el borde, cambia de canción y recién
                                     // entonces vuelve el offset a cero: así nunca se ve el salto.
                                     suspend fun commit(goNext: Boolean) {
-                                        dragOffset.animateTo(
+                                        settleOffset.snapTo(liveDrag)
+                                        settleOffset.animateTo(
                                             if (goNext) -step else step,
                                             tween(240, easing = FastOutSlowInEasing),
                                         )
                                         val previousIndex = controller.currentMediaItemIndex
                                         if (goNext) controller.seekToNext() else controller.seekToPrevious()
                                         if (awaitIndexChange(controller, previousIndex)) {
-                                            dragOffset.snapTo(0f)
+                                            settleOffset.snapTo(0f)
+                                            liveDrag = 0f
                                         } else {
-                                            snapBack()
+                                            // El seek no ocurrió: la carátula vuelve sola.
+                                            settleOffset.animateTo(0f, spring(0.9f, Spring.StiffnessMediumLow))
+                                            liveDrag = 0f
                                         }
                                     }
 
-                                    awaitEachGesture {
-                                        val down = awaitFirstDown(requireUnconsumed = false)
-                                        val tracker = VelocityTracker()
-                                        tracker.addPosition(down.uptimeMillis, down.position)
-                                        var accumulatedX = 0f
-                                        var accumulatedY = 0f
-                                        var decided = false
-                                        var dragging = false
+                                    while (true) {
+                                        var released = false
+                                        var velocityX = 0f
 
-                                        while (true) {
-                                            val event = awaitPointerEvent()
-                                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                            if (!change.pressed) break
+                                        // Fase 1: medir. Dentro de awaitEachGesture el scope está
+                                        // restringido, así que acá NO se puede animar ni lanzar
+                                        // corrutinas: sólo se escribe el estado del arrastre.
+                                        awaitEachGesture {
+                                            val down = awaitFirstDown(requireUnconsumed = false)
+                                            val tracker = VelocityTracker()
+                                            tracker.addPosition(down.uptimeMillis, down.position)
+                                            var accumulatedX = 0f
+                                            var accumulatedY = 0f
+                                            var decided = false
+                                            var dragging = false
 
-                                            tracker.addPosition(change.uptimeMillis, change.position)
-                                            val delta = change.positionChange()
-                                            accumulatedX += delta.x
-                                            accumulatedY += delta.y
+                                            while (true) {
+                                                val event = awaitPointerEvent()
+                                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                                if (!change.pressed) break
 
-                                            if (!decided) {
-                                                val slop = viewConfiguration.touchSlop
-                                                val horizontal = abs(accumulatedX) > slop &&
-                                                    abs(accumulatedX) > abs(accumulatedY) * 1.2f
-                                                val vertical = abs(accumulatedY) > slop
-                                                if (horizontal) {
-                                                    decided = true
-                                                    dragging = true
-                                                } else if (vertical) {
-                                                    // Es un scroll vertical (p. ej. la letra): se
-                                                    // deja pasar al contenedor sin reclamar el gesto.
-                                                    decided = true
-                                                    dragging = false
+                                                tracker.addPosition(change.uptimeMillis, change.position)
+                                                val delta = change.positionChange()
+                                                accumulatedX += delta.x
+                                                accumulatedY += delta.y
+
+                                                if (!decided) {
+                                                    val slop = viewConfiguration.touchSlop
+                                                    val horizontal = abs(accumulatedX) > slop &&
+                                                        abs(accumulatedX) > abs(accumulatedY) * 1.2f
+                                                    if (horizontal) {
+                                                        decided = true
+                                                        dragging = true
+                                                    } else if (abs(accumulatedY) > slop) {
+                                                        // Scroll vertical (letra, cola): se deja
+                                                        // pasar sin reclamar el gesto.
+                                                        decided = true
+                                                        dragging = false
+                                                    }
+                                                }
+
+                                                if (!dragging) continue
+
+                                                change.consume()
+                                                // En el primer/último tema la carátula se resiste:
+                                                // avisa que ahí no hay nada más.
+                                                val blocked =
+                                                    (accumulatedX > 0f && !controller.hasPreviousMediaItem()) ||
+                                                        (accumulatedX < 0f && !controller.hasNextMediaItem())
+                                                liveDrag = if (blocked) {
+                                                    accumulatedX * SWIPE_EDGE_RESISTANCE
+                                                } else {
+                                                    accumulatedX
                                                 }
                                             }
 
-                                            if (!dragging) continue
-
-                                            change.consume()
-                                            // En el primer/último tema la carátula se resiste: avisa
-                                            // que ahí no hay nada más en vez de quedarse pegada.
-                                            val blocked =
-                                                (accumulatedX > 0f && !controller.hasPreviousMediaItem()) ||
-                                                    (accumulatedX < 0f && !controller.hasNextMediaItem())
-                                            val next = if (blocked) accumulatedX * SWIPE_EDGE_RESISTANCE else accumulatedX
-                                            dragOffset.snapTo(next)
+                                            if (dragging) {
+                                                velocityX = tracker.calculateVelocity().x
+                                                released = true
+                                            }
                                         }
 
-                                        if (!dragging) return@awaitEachGesture
-
-                                        val velocity = tracker.calculateVelocity().x
-                                        val goNext = dragOffset.value < -threshold || velocity < -flingThreshold
-                                        val goPrevious = dragOffset.value > threshold || velocity > flingThreshold
-
-                                        scope.launch {
-                                            when {
-                                                goNext && controller.hasNextMediaItem() -> commit(goNext = true)
-                                                goPrevious && controller.hasPreviousMediaItem() -> commit(goNext = false)
-                                                else -> snapBack()
-                                            }
+                                        // Fase 2: decidir y animar, ya fuera del scope restringido.
+                                        if (!released) continue
+                                        val goNext = liveDrag < -threshold || velocityX < -flingThreshold
+                                        val goPrevious = liveDrag > threshold || velocityX > flingThreshold
+                                        when {
+                                            goNext && controller.hasNextMediaItem() ->
+                                                gestureScope.launch { commit(goNext = true) }
+                                            goPrevious && controller.hasPreviousMediaItem() ->
+                                                gestureScope.launch { commit(goNext = false) }
+                                            else -> gestureScope.launch { snapBack() }
                                         }
                                     }
                                 },

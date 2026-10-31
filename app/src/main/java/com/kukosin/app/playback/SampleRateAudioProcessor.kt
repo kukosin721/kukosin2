@@ -173,7 +173,7 @@ class SampleRateAudioProcessor(
             }
 
             else -> for (i in 0 until count) { // C.ENCODING_PCM_FLOAT
-                val v = Float.floatToIntBits(src[i].coerceIn(-1f, 1f))
+                val v = src[i].coerceIn(-1f, 1f).toRawBits()
                 out.put((v and 0xFF).toByte())
                 out.put(((v shr 8) and 0xFF).toByte())
                 out.put(((v shr 16) and 0xFF).toByte())
