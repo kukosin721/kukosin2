@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kukosin.app.ui.theme.*
@@ -46,13 +47,14 @@ import kotlin.random.Random
  * - La onda se DESPLAZA bajo aguja Gold fija: progress 0..1 -> contenido -progress*contentW
  * - Drag parte SIEMPRE desde 1:43 (o donde estés), no salta a 0:00. Velocidad 0.32x sútil.
  * - Cada canción tiene su onda única (seed = hash de trackKey)
- * - Ondas grandes (92dp) + botones centrados en la onda (no en el Box)
+ * - Onda amplia y adaptable + botones centrados en la onda (no en el Box)
  */
 @Composable
 fun KukosinWaveformSlider(
     progress: Float,
     onSeek: (Float) -> Unit,
     modifier: Modifier = Modifier,
+    waveHeight: Dp = 128.dp,
     waveform: List<Float>? = null,
     trackKey: String? = null, // pásale track.uri.toString() o "title|artist" -> onda única por canción
     isPlaying: Boolean = true,
@@ -100,7 +102,11 @@ fun KukosinWaveformSlider(
 
     val bars = remember(waveform, trackKey) {
         if (waveform != null) {
-            if (waveform.size >= 160) waveform else expandWaveform(waveform, 180)
+            when {
+                waveform.isEmpty() -> List(180) { 0f }
+                waveform.size >= 160 -> waveform
+                else -> expandWaveform(waveform, 180)
+            }
         } else {
             val seed = trackKey?.hashCode() ?: 42
             generateKukosinWaveform(180, seed = seed)
@@ -110,12 +116,12 @@ fun KukosinWaveformSlider(
     val currentDisplayProgress by rememberUpdatedState(progressForGestures)
     val currentClamped by rememberUpdatedState(clamped)
 
-    // Dimensiones grandes (lo que pediste)
-    val boxHeight = 165.dp
+    // Más altura y barras más anchas, con una variante compacta para teléfonos pequeños.
     val waveTopDp = 18.dp
-    val waveHDp = 92.dp
-    val barWDp = 3.8.dp
-    val gapDp = 3.0.dp
+    val waveHDp = waveHeight
+    val boxHeight = waveHDp + 74.dp
+    val barWDp = 4.4.dp
+    val gapDp = 3.2.dp
 
     Box(
         modifier = modifier
@@ -197,7 +203,9 @@ fun KukosinWaveformSlider(
             )
 
             bars.forEachIndexed { i, amp ->
-                val hFrac = 0.16f + amp.coerceIn(0f, 1f) * 0.84f
+                val normalized = amp.coerceIn(0f, 1f)
+                // El silencio real sigue siendo una línea baja, incluso con la onda más alta.
+                val hFrac = if (normalized <= 0.0001f) 0.035f else 0.16f + normalized * 0.84f
                 val bh = waveH * hFrac
                 val x = startX + i * slot
                 if (x + barW < -12.dp.toPx() || x > w + 12.dp.toPx()) return@forEachIndexed
@@ -226,7 +234,7 @@ fun KukosinWaveformSlider(
         }
 
         // ── 2. BOTONES CENTRADOS EN LA ONDA (no en el Box) ────────────────
-        // Onda va de 18dp a 110dp (18+92), centro 64dp. Botones centrados ahí.
+        // Los controles permanecen centrados en la zona de la onda, también en compacto.
         Box(
             modifier = Modifier
                 .fillMaxWidth()

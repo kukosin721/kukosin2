@@ -60,6 +60,9 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.rememberTransition
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
@@ -259,6 +262,9 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
     val analysis by viewModel.analysisState.collectAsStateWithLifecycle()
     val audioConfig by viewModel.audioConfig.collectAsStateWithLifecycle()
     var showSettings by remember { mutableStateOf(false) }
+    val settingsVisibility = remember { MutableTransitionState(false) }
+    settingsVisibility.targetState = showSettings
+    val settingsDialogVisible = settingsVisibility.currentState || settingsVisibility.targetState || !settingsVisibility.isIdle
 
     val density = LocalDensity.current
     val playerSheetScope = rememberCoroutineScope()
@@ -339,14 +345,20 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
     val dragRangePx = (rootSizePx.height * 0.68f).takeIf { it > 240f }
         ?: with(density) { 520.dp.toPx() }
     val currentDragRangePx by rememberUpdatedState(dragRangePx)
-    val lyricsDragRangePx = with(density) { 240.dp.toPx() }
+    val lyricsDragRangePx = with(density) { 200.dp.toPx() }
 
+    // Reservar espacio a la onda ampliada sin sacar los controles de la pantalla.
+    val waveformHeight = if (rootSizePx.height > 0 && with(density) { rootSizePx.height.toDp() } < 720.dp) {
+        108.dp
+    } else {
+        128.dp
+    }
     val maxArtDp = if (rootSizePx.height > 0 && rootSizePx.width > 0) {
         with(density) {
             minOf(
                 320.dp.toPx(),
-                rootSizePx.width - 48.dp.toPx(),
-                (rootSizePx.height - 496.dp.toPx()).coerceAtLeast(120.dp.toPx()),
+                (rootSizePx.width - 48.dp.toPx()).coerceAtLeast(1.dp.toPx()),
+                (rootSizePx.height - (waveformHeight + 405.dp).toPx()).coerceAtLeast(120.dp.toPx()),
             ).toDp()
         }
     } else {
@@ -386,7 +398,7 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
 
     // Como el reproductor es la pantalla principal, Atrás en Biblioteca/Ecualizador/Búsqueda
     // retrocede en subcategorías o vuelve con animación al reproductor principal.
-    val modalOpen = showQueueSheet || showSignalPath || showSettings ||
+    val modalOpen = showQueueSheet || showSignalPath || settingsDialogVisible ||
         library.selectedAlbum != null || library.selectedArtist != null ||
         library.selectedTagGroup != null || library.inspectTrack != null
     BackHandler(enabled = !modalOpen && (!showNowPlaying || sheetProgress < 0.999f)) {
@@ -431,68 +443,83 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
     ) {
         val bottomPadding = 108
 
-        when (activeSection) {
-            AppSection.LIBRARY -> PowerampLibraryWorkspace(
-                library = library,
-                hasPermission = hasPermission,
-                output = output,
-                currentUri = playback.current?.uri,
-                isPlaying = playback.isPlaying,
-                controller = controller,
-                bottomPadding = bottomPadding,
-                onBackToPlayer = { animatePlayerSheet(target = 1f, fromDrag = false) },
-                onSelectCategory = viewModel::selectCategory,
-                onQueryChange = viewModel::onQueryChange,
-                onRequestPermission = { permissionLauncher.launch(audioPermissions()) },
-                onRescan = {
-                    if (hasPermission) viewModel.refresh() else permissionLauncher.launch(audioPermissions())
+        // La sección entra al minimizar y sale al volver, ligada al mismo progreso
+        // del morph para que nunca haya un corte entre ambas pantallas.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    val reveal = (1f - sheetProgress).coerceIn(0f, 1f)
+                    alpha = reveal
+                    translationY = (1f - reveal) * 28.dp.toPx()
+                    val scale = 0.975f + 0.025f * reveal
+                    scaleX = scale
+                    scaleY = scale
                 },
-                onOpenSignalPath = { showSignalPath = true },
-                onOpenQueueSheet = { showQueueSheet = true },
-                onTrackClick = { tracks, index -> playTrackList(controller, tracks, index) },
-                onAlbumClick = viewModel::selectAlbum,
-                onArtistClick = viewModel::selectArtist,
-                onTagGroupClick = viewModel::selectTagGroup,
-                onFolderClick = viewModel::navigateToFolder,
-                onNavigateUpFolder = { viewModel.navigateUpFolder() },
-                onInspectTrack = viewModel::setInspectTrack,
-                onMessage = { msg -> userMessage = msg },
-            )
+        ) {
+            when (activeSection) {
+                AppSection.LIBRARY -> PowerampLibraryWorkspace(
+                    library = library,
+                    hasPermission = hasPermission,
+                    output = output,
+                    currentUri = playback.current?.uri,
+                    isPlaying = playback.isPlaying,
+                    controller = controller,
+                    bottomPadding = bottomPadding,
+                    onBackToPlayer = { animatePlayerSheet(target = 1f, fromDrag = false) },
+                    onSelectCategory = viewModel::selectCategory,
+                    onQueryChange = viewModel::onQueryChange,
+                    onRequestPermission = { permissionLauncher.launch(audioPermissions()) },
+                    onRescan = {
+                        if (hasPermission) viewModel.refresh() else permissionLauncher.launch(audioPermissions())
+                    },
+                    onOpenSignalPath = { showSignalPath = true },
+                    onOpenQueueSheet = { showQueueSheet = true },
+                    onTrackClick = { tracks, index -> playTrackList(controller, tracks, index) },
+                    onAlbumClick = viewModel::selectAlbum,
+                    onArtistClick = viewModel::selectArtist,
+                    onTagGroupClick = viewModel::selectTagGroup,
+                    onFolderClick = viewModel::navigateToFolder,
+                    onNavigateUpFolder = { viewModel.navigateUpFolder() },
+                    onInspectTrack = viewModel::setInspectTrack,
+                    onMessage = { msg -> userMessage = msg },
+                )
 
-            AppSection.EQUALIZER -> PowerampEqualizerWorkspace(
-                bottomPadding = bottomPadding,
-                onBackToPlayer = { animatePlayerSheet(target = 1f, fromDrag = false) },
-            )
+                AppSection.EQUALIZER -> PowerampEqualizerWorkspace(
+                    bottomPadding = bottomPadding,
+                    onBackToPlayer = { animatePlayerSheet(target = 1f, fromDrag = false) },
+                )
 
-            AppSection.SEARCH -> PowerampSearchWorkspace(
-                library = library,
-                hasPermission = hasPermission,
-                currentUri = playback.current?.uri,
-                playingYtmId = playingYtmId,
-                isPlaying = playback.isPlaying,
-                playbackError = playback.error,
-                controller = controller,
-                bottomPadding = bottomPadding,
-                onBackToPlayer = { animatePlayerSheet(target = 1f, fromDrag = false) },
-                onQueryChange = viewModel::onQueryChange,
-                onYtmQueryChange = viewModel::onYtmQueryChange,
-                onSearchYtm = { viewModel.searchYtm() },
-                onRequestPermission = { permissionLauncher.launch(audioPermissions()) },
-                onLocalTrackClick = { tracks, index -> playTrackList(controller, tracks, index) },
-                onAlbumClick = viewModel::selectAlbum,
-                onArtistClick = viewModel::selectArtist,
-                onInspectTrack = viewModel::setInspectTrack,
-                onYtmTrackClick = { ytmTrack ->
-                    controller?.let { player ->
-                        val queue = library.ytmTracks.map(YtmService::toMediaItem)
-                        val startIndex = library.ytmTracks
-                            .indexOfFirst { it.id == ytmTrack.id }
-                            .coerceAtLeast(0)
-                        QueueManager.playItems(player, queue, startIndex)
-                    }
-                },
-                onMessage = { msg -> userMessage = msg },
-            )
+                AppSection.SEARCH -> PowerampSearchWorkspace(
+                    library = library,
+                    hasPermission = hasPermission,
+                    currentUri = playback.current?.uri,
+                    playingYtmId = playingYtmId,
+                    isPlaying = playback.isPlaying,
+                    playbackError = playback.error,
+                    controller = controller,
+                    bottomPadding = bottomPadding,
+                    onBackToPlayer = { animatePlayerSheet(target = 1f, fromDrag = false) },
+                    onQueryChange = viewModel::onQueryChange,
+                    onYtmQueryChange = viewModel::onYtmQueryChange,
+                    onSearchYtm = { viewModel.searchYtm() },
+                    onRequestPermission = { permissionLauncher.launch(audioPermissions()) },
+                    onLocalTrackClick = { tracks, index -> playTrackList(controller, tracks, index) },
+                    onAlbumClick = viewModel::selectAlbum,
+                    onArtistClick = viewModel::selectArtist,
+                    onInspectTrack = viewModel::setInspectTrack,
+                    onYtmTrackClick = { ytmTrack ->
+                        controller?.let { player ->
+                            val queue = library.ytmTracks.map(YtmService::toMediaItem)
+                            val startIndex = library.ytmTracks
+                                .indexOfFirst { it.id == ytmTrack.id }
+                                .coerceAtLeast(0)
+                            QueueManager.playItems(player, queue, startIndex)
+                        }
+                    },
+                    onMessage = { msg -> userMessage = msg },
+                )
+            }
         }
 
         MiniPlayer(
@@ -598,6 +625,7 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
                 },
                 interactiveEnabled = showNowPlaying || sheetProgress > 0.08f || isSheetDragging,
                 maxArtDp = maxArtDp,
+                waveformHeight = waveformHeight,
                 playPauseScale = playPauseScale,
                 miniArtRectProvider = resolveMiniArtRect,
                 fullArtSlotRectProvider = resolveFullArtSlotRect,
@@ -748,8 +776,9 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
         )
     }
 
-    if (showSettings) {
+    if (settingsDialogVisible) {
         FullScreenSettingsScreen(
+            visibilityState = settingsVisibility,
             output = output,
             autoAnalyze = audioConfig.autoAnalyze,
             onToggleAutoAnalyze = viewModel::toggleAutoAnalyze,
@@ -1891,6 +1920,7 @@ private fun NowPlayingSheet(
     onToggleFavorite: () -> Unit,
     interactiveEnabled: Boolean,
     maxArtDp: Dp,
+    waveformHeight: Dp,
     playPauseScale: Float,
     miniArtRectProvider: () -> Rect,
     fullArtSlotRectProvider: () -> Rect,
@@ -2039,87 +2069,70 @@ private fun NowPlayingSheet(
         }
     }
 
-    // Un solo reconocedor con bloqueo de eje: horizontal cambia de tema; vertical hacia
-    // arriba revela letras; vertical hacia abajo minimiza o cierra letras si están abiertas.
-    val coverGesture = Modifier.pointerInput(controller, track?.uri, maxArtDp) {
-        awaitEachGesture {
-            val down = awaitFirstDown(requireUnconsumed = false)
-            if (!currentInteractive || currentSheetProgress < 0.98f) return@awaitEachGesture
-            val tracker = VelocityTracker()
-            tracker.addPosition(down.uptimeMillis, down.position)
-            var axis: CoverGestureAxis? = null
-            var totalX = 0f
-            var totalY = 0f
-            var swipeStep = artworkWidthPx.coerceAtLeast(1f)
-            var finished = false
-            try {
-                while (true) {
-                    val event = awaitPointerEvent()
-                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                    tracker.addPosition(change.uptimeMillis, change.position)
-                    if (change.isConsumed) break
-                    if (!change.pressed) {
-                        val velocity = tracker.calculateVelocity()
-                        when (axis) {
-                            CoverGestureAxis.TRACK -> settleHorizontal(swipeStep, velocity.x, cancelled = false)
-                            CoverGestureAxis.LYRICS -> currentOnLyricsEnd(velocity.y)
-                            CoverGestureAxis.MINIMIZE -> currentOnSheetEnd(velocity.y)
-                            null -> Unit
-                        }
-                        if (axis != null) change.consume()
-                        finished = true
-                        break
-                    }
-                    var dx = change.position.x - change.previousPosition.x
-                    var dy = change.position.y - change.previousPosition.y
-                    if (axis == null) {
-                        totalX += dx
-                        totalY += dy
-                        val slop = viewConfiguration.touchSlop
-                        axis = classifyCoverGesture(totalX, totalY, currentLyricsProgress, slop) ?: continue
-                        dx = if (totalX > 0f) (totalX - slop).coerceAtLeast(0f) else (totalX + slop).coerceAtMost(0f)
-                        dy = if (totalY > 0f) (totalY - slop).coerceAtLeast(0f) else (totalY + slop).coerceAtMost(0f)
-                        when (axis) {
-                            CoverGestureAxis.TRACK -> {
-                                horizontalJob?.cancel()
-                                swipeStep = lerpFloat(
-                                    artworkWidthPx * currentArtScale,
-                                    cornerArtWidthPx,
-                                    currentLyricsProgress.coerceIn(0f, 1f),
-                                ).coerceAtLeast(1f)
-                                hasPrevious = controller?.hasPreviousMediaItem() == true
-                                hasNext = controller?.hasNextMediaItem() == true
-                                previousArt = artworkAt(-1)
-                                nextArt = artworkAt(1)
-                            }
-                            CoverGestureAxis.LYRICS -> currentOnLyricsStart()
-                            CoverGestureAxis.MINIMIZE -> currentOnSheetStart()
-                        }
-                    }
-                    when (axis) {
-                        CoverGestureAxis.TRACK -> {
-                            val raw = dragX + dx
-                            val blocked = (raw > 0f && !hasPrevious) || (raw < 0f && !hasNext)
-                            dragX = if (blocked) dragX + dx * SWIPE_EDGE_RESISTANCE
-                                else raw.coerceIn(-swipeStep, swipeStep)
-                        }
-                        CoverGestureAxis.LYRICS -> currentOnLyricsDelta(dy)
-                        CoverGestureAxis.MINIMIZE -> currentOnSheetDelta(dy)
-                    }
-                    change.consume()
-                }
-            } finally {
-                if (!finished) {
-                    when (axis) {
-                        CoverGestureAxis.TRACK -> settleHorizontal(swipeStep, 0f, cancelled = true)
-                        CoverGestureAxis.LYRICS -> currentOnLyricsCancel()
-                        CoverGestureAxis.MINIMIZE -> currentOnSheetCancel()
-                        null -> Unit
-                    }
-                }
-            }
-        }
+    // El hit-test vive en el contenedor estable, por encima de la carátula dibujada.
+    // El rectángulo sigue la portada visual; una vez iniciado, el gesto usa coordenadas
+    // del reproductor que no se mueven mientras aparecen las letras.
+    val scaledCenterArt = if (centerArtRect == Rect.Zero) Rect.Zero
+        else scaleRectAroundCenter(centerArtRect, playPauseScale)
+    val visibleCoverRect = if (scaledCenterArt == Rect.Zero) Rect.Zero else {
+        val destination = if (cornerArtRect != Rect.Zero) {
+            lerpRect(scaledCenterArt, cornerArtRect, lyricsProgress.coerceIn(0f, 1f))
+        } else scaledCenterArt
+        Rect(destination.left + dragX, destination.top, destination.right + dragX, destination.bottom)
     }
+    val hitBounds = expandedCoverHitBounds(visibleCoverRect, with(density) { 12.dp.toPx() })
+    var swipeStep by remember { mutableFloatStateOf(1f) }
+    val coverGesture = rememberCoverGestureModifier(
+        enabled = interactiveEnabled && sheetProgress >= 0.98f,
+        hitBounds = hitBounds,
+        lyricsProgress = lyricsProgress,
+        controllerKey = controller,
+        trackKey = track?.uri,
+        onStart = { axis ->
+            when (axis) {
+                CoverGestureAxis.TRACK -> {
+                    horizontalJob?.cancel()
+                    swipeStep = lerpFloat(
+                        artworkWidthPx * currentArtScale,
+                        cornerArtWidthPx,
+                        currentLyricsProgress.coerceIn(0f, 1f),
+                    ).coerceAtLeast(1f)
+                    hasPrevious = controller?.hasPreviousMediaItem() == true
+                    hasNext = controller?.hasNextMediaItem() == true
+                    previousArt = artworkAt(-1)
+                    nextArt = artworkAt(1)
+                }
+                CoverGestureAxis.LYRICS -> currentOnLyricsStart()
+                CoverGestureAxis.MINIMIZE -> currentOnSheetStart()
+            }
+        },
+        onDrag = { axis, dx, dy ->
+            when (axis) {
+                CoverGestureAxis.TRACK -> {
+                    val raw = dragX + dx
+                    val blocked = (raw > 0f && !hasPrevious) || (raw < 0f && !hasNext)
+                    dragX = if (blocked) dragX + dx * SWIPE_EDGE_RESISTANCE
+                        else raw.coerceIn(-swipeStep, swipeStep)
+                }
+                CoverGestureAxis.LYRICS -> currentOnLyricsDelta(dy)
+                CoverGestureAxis.MINIMIZE -> currentOnSheetDelta(dy)
+            }
+        },
+        onEnd = { axis, velocityX, velocityY ->
+            when (axis) {
+                CoverGestureAxis.TRACK -> settleHorizontal(swipeStep, velocityX, cancelled = false)
+                CoverGestureAxis.LYRICS -> currentOnLyricsEnd(velocityY)
+                CoverGestureAxis.MINIMIZE -> currentOnSheetEnd(velocityY)
+            }
+        },
+        onCancel = { axis ->
+            when (axis) {
+                CoverGestureAxis.TRACK -> settleHorizontal(swipeStep, 0f, cancelled = true)
+                CoverGestureAxis.LYRICS -> currentOnLyricsCancel()
+                CoverGestureAxis.MINIMIZE -> currentOnSheetCancel()
+            }
+        },
+    )
 
     // La cabecera permite cerrar letras con un arrastre, sin robar el scroll del panel.
     val headerDrag = Modifier.pointerInput(Unit) {
@@ -2153,12 +2166,58 @@ private fun NowPlayingSheet(
             },
         )
     }
-    val bodyDismiss = if (interactiveEnabled && lyricsProgress <= 0.001f) headerDrag else Modifier
+    // Este nodo permanece montado durante el gesto. Solo inicia el minimizado si
+    // el arrastre empezó fuera de letras y va hacia abajo; no roba su scroll.
+    val bodyDismiss = Modifier.pointerInput(Unit) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            if (!currentInteractive || currentLyricsProgress > 0.01f || currentSheetProgress < 0.98f) {
+                return@awaitEachGesture
+            }
+            val tracker = VelocityTracker()
+            tracker.addPosition(down.uptimeMillis, down.position)
+            var totalX = 0f
+            var totalY = 0f
+            var dragging = false
+            var finished = false
+            try {
+                while (true) {
+                    val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                    tracker.addPosition(change.uptimeMillis, change.position)
+                    if (change.isConsumed) break
+                    if (!change.pressed) {
+                        if (dragging) {
+                            currentOnSheetEnd(tracker.calculateVelocity().y)
+                            change.consume()
+                        }
+                        finished = true
+                        break
+                    }
+                    totalX += change.position.x - change.previousPosition.x
+                    val deltaY = change.position.y - change.previousPosition.y
+                    totalY += deltaY
+                    val amount = if (!dragging) {
+                        val slop = viewConfiguration.touchSlop
+                        if (maxOf(abs(totalX), abs(totalY)) <= slop) continue
+                        if (totalY <= 0f || abs(totalX) > abs(totalY)) break
+                        dragging = true
+                        currentOnSheetStart()
+                        (totalY - slop).coerceAtLeast(0f)
+                    } else deltaY
+                    currentOnSheetDelta(amount)
+                    change.consume()
+                }
+            } finally {
+                if (!finished && dragging) currentOnSheetCancel()
+            }
+        }
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .onGloballyPositioned { sheetCoords = it }
+            .then(coverGesture)
             .then(bodyDismiss),
     ) {
         // El fondo sigue a la carátula durante el morph con el MiniPlayer.
@@ -2265,8 +2324,7 @@ private fun NowPlayingSheet(
                                     Modifier.clearAndSetSemantics { }
                                 },
                             )
-                            .clickable(enabled = interactiveEnabled, onClick = onOpenLyrics)
-                            .then(coverGesture),
+                            .clickable(enabled = interactiveEnabled, onClick = onOpenLyrics),
                     )
                     Column(
                         modifier = Modifier
@@ -2349,6 +2407,7 @@ private fun NowPlayingSheet(
                         KukosinWaveformSlider(
                             progress = if (duration > 0) position.toFloat() / duration else 0f,
                             onSeek = { fraction -> if (interactiveEnabled) controller?.seekTo((fraction * duration).toLong()) },
+                            waveHeight = waveformHeight,
                             waveform = if (track == null) flatWaveform else realWaveform,
                             trackKey = track?.uri?.toString(),
                             isPlaying = isPlaying,
@@ -2404,7 +2463,6 @@ private fun NowPlayingSheet(
                                         Modifier
                                             .semantics { contentDescription = "Carátula. Toca para cerrar letras" }
                                             .clickable(onClick = onCloseLyrics)
-                                            .then(coverGesture)
                                     } else Modifier,
                                 ),
                         )
@@ -3113,6 +3171,7 @@ private fun MetadataInspectorDialog(
 
 @Composable
 private fun FullScreenSettingsScreen(
+    visibilityState: MutableTransitionState<Boolean>,
     output: OutputDevice,
     autoAnalyze: Boolean,
     onToggleAutoAnalyze: () -> Unit,
@@ -3134,12 +3193,27 @@ private fun FullScreenSettingsScreen(
     onRescan: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val transition = rememberTransition(visibilityState, label = "settingsScreen")
+    val reveal by transition.animateFloat(
+        transitionSpec = {
+            tween(durationMillis = if (targetState) 300 else 220, easing = FastOutSlowInEasing)
+        },
+        label = "settingsReveal",
+    ) { visible -> if (visible) 1f else 0f }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         Surface(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    alpha = reveal
+                    translationY = (1f - reveal) * 32.dp.toPx()
+                    val scale = 0.975f + 0.025f * reveal
+                    scaleX = scale
+                    scaleY = scale
+                },
             color = Ink,
             contentColor = Cream,
         ) {
