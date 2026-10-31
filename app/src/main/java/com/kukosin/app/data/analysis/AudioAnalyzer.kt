@@ -66,7 +66,7 @@ object AudioAnalyzer {
         }
 
         val sampleRate = when {
-            audio?.sampleRate ?: 0 > 0 -> audio!!.sampleRate
+            audio != null && audio.sampleRate > 0 -> audio.sampleRate
             track.sampleRate > 0 -> track.sampleRate
             else -> 0
         }
@@ -123,7 +123,7 @@ object AudioAnalyzer {
         }
 
         val sampleRate = when {
-            audio?.sampleRate ?: 0 > 0 -> audio!!.sampleRate
+            audio != null && audio.sampleRate > 0 -> audio.sampleRate
             track.sampleRate > 0 -> track.sampleRate
             else -> 0
         }

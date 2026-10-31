@@ -124,12 +124,13 @@ object QueueManager {
     /** Alterna el modo aleatorio materializando el orden real de la cola principal. */
     fun toggleShuffle(controller: MediaController) {
         val enable = !_shuffleEnabled.value
-        _shuffleEnabled.value = enable
-        controller.shuffleModeEnabled = false
-
         val count = controller.mediaItemCount
         val start = customBlockEnd(controller)
+        // Con 0 o 1 tema pendiente no hay nada que reordenar: no se toca el flag.
         if (count - start <= 1) return
+
+        _shuffleEnabled.value = enable
+        controller.shuffleModeEnabled = false
 
         val tail = List(count - start) { controller.getMediaItemAt(start + it) }
         if (enable) {

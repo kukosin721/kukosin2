@@ -4,6 +4,8 @@ import android.util.Log
 import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
@@ -21,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.IOException
 
@@ -79,6 +82,7 @@ class PlaybackService : MediaSessionService() {
         newPlayer.volume = 1f
 
         AudioRoute.attach(this, newPlayer)
+        newPlayer.addListener(prefetchListener)
         mediaSession = MediaSession.Builder(this, newPlayer).build()
         player = newPlayer
 
@@ -129,12 +133,39 @@ class PlaybackService : MediaSessionService() {
         return dataSpec.withUri(audio.url.toUri())
     }
 
+    /**
+     * Resuelve en segundo plano el audio del tema que viene.
+     *
+     * Resolver una URL de YouTube Music tarda ~1,4 s en frío. Si se hace recién al abrir el
+     * stream, entre canción y canción se siente un silencio largo. Acá se llena la caché de
+     * [YtmService] con anticipación, así el "siguiente" arranca casi instantáneo.
+     */
+    private val prefetchListener = object : Player.Listener {
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            player?.let { prefetchNext(it) }
+        }
+    }
+
+    private fun prefetchNext(player: Player) {
+        val nextIndex = player.nextMediaItemIndex
+        if (nextIndex == C.INDEX_UNSET) return
+        val uri = player.getMediaItemAt(nextIndex).localConfiguration?.uri ?: return
+        if (uri.scheme != YtmService.STREAM_SCHEME) return
+        val videoId = uri.lastPathSegment ?: return
+        serviceScope.launch(Dispatchers.IO) {
+            runCatching { YtmService.resolveAudio(videoId) }
+                .onSuccess { Log.d(TAG, "prefetch $videoId listo") }
+        }
+    }
+
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? {
         return mediaSession
     }
 
     override fun onDestroy() {
         settingsJob?.cancel()
+        player?.removeListener(prefetchListener)
+        AudioRoute.detach()
         mediaSession?.run {
             release()
         }

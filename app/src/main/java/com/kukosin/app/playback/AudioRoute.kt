@@ -43,10 +43,21 @@ object AudioRoute {
     var appContext: Context? = null
         private set
 
+    /**
+     * Un único callback para todo el proceso.
+     *
+     * `attach()` se llama en cada `recreatePlayer()` (o sea, cada vez que cambia un ajuste de
+     * audio). Antes se registraba un callback nuevo en cada llamada y no se quitaba nunca:
+     * se acumulaban y `applyRoute()` corría N veces por cada evento de dispositivo.
+     */
+    private var deviceCallback: AudioDeviceCallback? = null
+    private var audioManager: AudioManager? = null
+
     fun attach(context: Context, player: Player) {
         appContext = context.applicationContext
         UsbDacManager.init(context)
         val audioManager = context.getSystemService(AudioManager::class.java) ?: return
+        this.audioManager = audioManager
 
         fun applyRoute() {
             val device = pickPreferred(audioManager)
@@ -66,19 +77,29 @@ object AudioRoute {
         }
 
         applyRoute()
-        audioManager.registerAudioDeviceCallback(
-            object : AudioDeviceCallback() {
+        if (deviceCallback == null) {
+            val callback = object : AudioDeviceCallback() {
                 override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
                     UsbDacManager.scanDevices(context)
                     applyRoute()
                 }
+
                 override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
                     UsbDacManager.scanDevices(context)
                     applyRoute()
                 }
-            },
-            Handler(Looper.getMainLooper()),
-        )
+            }
+            audioManager.registerAudioDeviceCallback(callback, Handler(Looper.getMainLooper()))
+            deviceCallback = callback
+        }
+    }
+
+    /** Deja de escuchar cambios de dispositivo (al cerrar el servicio). */
+    fun detach() {
+        val callback = deviceCallback ?: return
+        audioManager?.unregisterAudioDeviceCallback(callback)
+        deviceCallback = null
+        audioManager = null
     }
 
     private fun pickPreferred(audioManager: AudioManager): AudioDeviceInfo? {

@@ -447,10 +447,15 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
         }
     }
 
-    if (showNowPlaying && playback.current != null && controller != null) {
+    // `controller` es un var delegado: no admite smart cast, así que se captura en locales
+    // en vez de forzar con `!!` (que rompería si algo cambia entre el chequeo y el uso).
+    val sheetController = controller
+    val sheetTrack = playback.current
+
+    if (showNowPlaying && sheetTrack != null && sheetController != null) {
         NowPlayingSheet(
-            track = playback.current!!,
-            controller = controller!!,
+            track = sheetTrack,
+            controller = sheetController,
             isPlaying = playback.isPlaying,
             output = output,
             analysis = analysis,
@@ -461,9 +466,9 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
         )
     }
 
-    if (showQueueSheet && controller != null) {
+    if (showQueueSheet && sheetController != null) {
         QueueSheet(
-            controller = controller!!,
+            controller = sheetController,
             tracks = library.tracks,
             audioConfig = audioConfig,
             onDismiss = { showQueueSheet = false },

@@ -114,6 +114,10 @@ reproductor (el `ResolvingDataSource` solo reescribe URIs `kukosin-ytm`, pero me
 confirmarlo):
 
 1. Reproduce un FLAC/WAV local, cambia de pista, pausa, busca en la barra de progreso.
+1b. **Resampler** (lo cambié por un filtro sinc): desactiva el modo bit-perfect y fija un
+   sample rate distinto al del archivo (p. ej. FLAC de 96 kHz con salida a 44.1 kHz).
+   Antes eso metía un tono espurio audible; ahora no debe notarse nada raro. Si tenés un
+   archivo con contenido muy agudo (platillos, ruido) es el mejor para escucharlo.
 2. Abre **Análisis** en un archivo local → el análisis FFT debe seguir funcionando.
 3. Conecta el DAC USB (si tienes) → el badge **DAC** y la ruta de señal deben seguir igual.
 
