@@ -1982,6 +1982,7 @@ private fun NowPlayingSheet(
                         KukosinWaveformSlider(
                             progress = if (duration > 0) position.toFloat() / duration else 0f,
                             onSeek = { controller.seekTo((it * duration).toLong()) },
+                            trackKey = track.uri.toString(), // onda única por canción (no todas iguales)
                             isPlaying = isPlaying,
                             onPlayPause = { if (controller.isPlaying) controller.pause() else controller.play() },
                             onPrev = { controller.seekToPrevious() },
